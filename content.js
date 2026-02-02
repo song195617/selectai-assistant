@@ -85,7 +85,7 @@ async function showButtons(x, y) {
   if (!iconContainer) {
     iconContainer = document.createElement('div');
     iconContainer.id = 'ai-btn-container';
-    const iconTranslate = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"></path></svg>`;
+    const iconTranslate = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3a14 14 0 0 1 0 18"></path><path d="M12 3a14 14 0 0 0 0 18"></path></svg>`;
     const iconChat = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>`;
     iconContainer.appendChild(createFloatBtn("翻译/解释", iconTranslate, () => initPopup('translate')));
     iconContainer.appendChild(createFloatBtn("AI 对话", iconChat, () => initPopup('chat')));
@@ -165,7 +165,7 @@ function createPopupFrame(targetRect, mode) {
         <span id="ai-title-icon" class="ai-status-icon"></span>
         <span id="ai-header-text">${title}</span>
       </div>
-      <div id="ai-header-actions">
+    <div id="ai-header-actions">
         <span id="ai-popup-stop" title="停止生成">${ICON_STOP}</span>
         <span id="ai-popup-pin" title="固定/跟随" style="font-weight:bold;">📌</span>
         <span id="ai-popup-close" title="关闭">✕</span>

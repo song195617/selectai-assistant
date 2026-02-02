@@ -153,6 +153,7 @@ function handleModelFormSubmit(e) {
     showStatus('\u2705 模型已添加到列表！', '#28a745');
   }
   renderUI();
+  chrome.storage.sync.set(currentSettings);
 }
 
 function deleteProvider(id) {
@@ -166,6 +167,7 @@ function deleteProvider(id) {
     currentSettings.activeProviderId = currentSettings.providers[0].id;
   }
   renderUI();
+  chrome.storage.sync.set(currentSettings);
 }
 
 function clearForm() {
@@ -206,10 +208,11 @@ function importConfig(e) {
       const imported = JSON.parse(event.target.result);
       if (!imported.providers) throw new Error("配置文件格式错误。");
       currentSettings = { ...DEFAULT_SETTINGS, ...imported };
-      saveSettings();
-      renderUI();
-      cancelEdit();
-      showStatus('\u2705 配置导入成功！', '#28a745');
+      chrome.storage.sync.set(currentSettings, () => {
+        renderUI();
+        cancelEdit();
+        showStatus('\u2705 配置导入成功！', '#28a745');
+      });
     } catch (err) {
       showStatus('\u274C 导入失败: ' + err.message, '#dc3545');
     }

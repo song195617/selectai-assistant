@@ -4,126 +4,314 @@
   <meta charset="UTF-8">
   <title>AI 助手配置</title>
   <style>
-    body { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; padding: 25px; width: 600px; color: #333; background-color: #f8f9fa; }
-    h2 { margin-top: 0; font-size: 20px; border-bottom: 2px solid #007bff; padding-bottom: 10px; color: #007bff; display: flex; justify-content: space-between; align-items: center; }
+    :root {
+      --bg: #0a0c10;
+      --panel: #ffffff;
+      --panel-soft: #f7f8fb;
+      --text: #111827;
+      --muted: #6b7280;
+      --accent: #0f6fff;
+      --accent-2: #16a34a;
+      --danger: #ef4444;
+      --border: #e5e7eb;
+      --radius: 16px;
+      --shadow: 0 18px 50px rgba(9, 20, 40, 0.2);
+    }
 
-    .btn-group { display: flex; gap: 10px; }
-    .btn-secondary { background: #6c757d; font-size: 12px; padding: 5px 10px; color: white; border: none; border-radius: 4px; cursor: pointer; }
-    .btn-secondary:hover { background: #5a6268; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+      color: var(--text);
+      background: radial-gradient(1200px 700px at 15% -10%, #3b82f6 0%, transparent 60%),
+                  radial-gradient(1000px 600px at 90% 0%, #10b981 0%, transparent 55%),
+                  #0b0f16;
+      min-height: 100vh;
+      padding: 28px 24px 40px;
+    }
 
-    .section { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
-    .section-title { font-weight: bold; margin-bottom: 10px; font-size: 14px; color: #555; display: block; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+    .page {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 18px;
+    }
 
-    label { display: block; font-weight: 600; margin-bottom: 5px; font-size: 13px; }
-    input, select, textarea { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; font-size: 13px; margin-bottom: 10px; }
-    textarea { font-family: Consolas, monospace; font-size: 12px; resize: vertical; }
+    .topbar {
+      background: rgba(255, 255, 255, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.7);
+      border-radius: 20px;
+      padding: 18px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+    }
 
-    .model-list { border: 1px solid #eee; border-radius: 4px; max-height: 150px; overflow-y: auto; margin-bottom: 15px; }
-    .model-item { padding: 8px 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; font-size: 13px; background: #fff; }
+    .topbar-title h1 { margin: 0; font-size: 24px; }
+    .topbar-title p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+
+    .btn-group { display: flex; gap: 10px; flex-wrap: wrap; }
+    .btn {
+      border: 1px solid transparent;
+      padding: 9px 14px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 12px;
+      transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn:active { transform: translateY(1px); }
+    .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 10px 26px rgba(15, 111, 255, 0.35); }
+    .btn-primary:hover { background: #0b5ad1; }
+    .btn-secondary { background: #111827; color: #e5e7eb; border: 1px solid #1f2937; }
+    .btn-secondary:hover { background: #0b1220; }
+    .btn-ghost { background: #f3f4f6; color: #111827; border: 1px solid #e5e7eb; }
+    .btn-ghost:hover { background: #e9eef5; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 18px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      box-shadow: 0 10px 30px rgba(16, 24, 40, 0.08);
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      padding-bottom: 8px;
+      border-bottom: 1px dashed #e5e7eb;
+    }
+
+    .panel-title {
+      font-weight: 800;
+      font-size: 14px;
+      color: #111827;
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .chip {
+      font-size: 11px;
+      color: #0f172a;
+      background: #eef2ff;
+      border: 1px solid #e0e7ff;
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+
+    label { display: block; font-weight: 700; margin-bottom: 6px; font-size: 12.5px; color: #374151; }
+    input, select, textarea {
+      width: 100%;
+      padding: 11px 12px;
+      border: 1px solid #dde3ea;
+      border-radius: 12px;
+      font-size: 13px;
+      background: #fbfcfe;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      margin-bottom: 12px;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(15, 111, 255, 0.15);
+      background: #fff;
+    }
+    textarea { font-family: Consolas, "SFMono-Regular", Menlo, monospace; font-size: 12px; resize: vertical; }
+
+    .model-list {
+      border: 1px solid #eef1f6;
+      border-radius: 14px;
+      max-height: 220px;
+      overflow-y: auto;
+      margin-bottom: 14px;
+      background: #fcfdff;
+    }
+    .model-item {
+      padding: 12px 12px;
+      border-bottom: 1px solid #eef1f6;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+    }
     .model-item:last-child { border-bottom: none; }
-    .model-info { display: flex; flex-direction: column; }
-    .model-name { font-weight: 600; color: #333; }
-    .model-sub { font-size: 11px; color: #888; }
+    .model-info { display: flex; flex-direction: column; gap: 4px; }
+    .model-name { font-weight: 800; color: #0f172a; }
+    .model-sub { font-size: 11px; color: var(--muted); }
 
     .item-actions { display: flex; gap: 8px; }
-    .btn-icon { cursor: pointer; font-size: 16px; color: #666; transition: color 0.2s; }
-    .btn-edit:hover { color: #007bff; }
-    .btn-delete:hover { color: #dc3545; }
+    .btn-icon {
+      cursor: pointer;
+      font-size: 16px;
+      color: #667085;
+      transition: color 0.2s;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+    .btn-edit:hover { color: var(--accent); background: #eef3ff; }
+    .btn-delete:hover { color: var(--danger); background: #ffecec; }
 
-    .add-form { background: #f1f3f5; padding: 10px; border-radius: 4px; border: 1px solid transparent; transition: border-color 0.3s; }
-    .add-form.editing { border-color: #007bff; background-color: #e7f1ff; }
+    .add-form {
+      background: var(--panel-soft);
+      padding: 14px;
+      border-radius: 14px;
+      border: 1px solid #e7ecf4;
+      transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+    .add-form.editing { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(15,111,255,0.12); background: #f1f6ff; }
 
-    .form-row { display: flex; gap: 10px; }
-    .form-col { flex: 1; }
-    .param-row { display: flex; gap: 15px; margin-bottom: 10px; }
-    .param-group { flex: 1; }
+    .form-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .param-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 6px; }
+    .param-row.single { grid-template-columns: 1fr; }
 
-    button.primary { background: #007bff; color: white; border: none; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: 600; width: 100%; margin-top: 10px; }
-    button.primary:hover { background: #0056b3; }
+    button.primary {
+      background: linear-gradient(135deg, #0f6fff, #0b5ad1);
+      color: white;
+      border: none;
+      padding: 14px 16px;
+      border-radius: 14px;
+      cursor: pointer;
+      font-weight: 800;
+      width: 100%;
+      margin-top: 6px;
+      box-shadow: 0 14px 34px rgba(15, 111, 255, 0.35);
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    button.primary:hover { transform: translateY(-1px); box-shadow: 0 18px 38px rgba(15, 111, 255, 0.4); }
 
-    .form-actions { display: flex; gap: 10px; margin-top: 10px; }
-    button.action-btn { flex: 1; border: none; padding: 8px; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 12px; }
-    button.btn-save-model { background: #28a745; color: white; }
-    button.btn-save-model:hover { background: #218838; }
-    button.btn-cancel { background: #6c757d; color: white; display: none; }
-    button.btn-cancel:hover { background: #5a6268; }
+    .form-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+    button.action-btn {
+      border: none;
+      padding: 10px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-weight: 800;
+      font-size: 12px;
+    }
+    button.btn-save-model { background: var(--accent-2); color: white; }
+    button.btn-save-model:hover { background: #128240; }
+    button.btn-cancel { background: #374151; color: white; display: none; }
+    button.btn-cancel:hover { background: #1f2937; }
 
-    #status { margin-top: 15px; text-align: center; font-size: 13px; min-height: 20px; font-weight: 500; }
+    .right-stack { display: grid; grid-template-rows: auto auto; gap: 18px; }
+
+    #status { margin-top: 12px; text-align: center; font-size: 12.5px; min-height: 20px; font-weight: 700; color: #0f172a; }
     #fileInput { display: none; }
+
+    @media (max-width: 1020px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 720px) {
+      body { padding: 18px 12px 30px; }
+      .topbar { flex-direction: column; align-items: flex-start; }
+      .form-row, .param-row, .form-actions { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
-  <h2>
-    AI 助手配置
-    <div class="btn-group">
-      <button id="exportBtn" class="btn-secondary">导出配置</button>
-      <button id="importBtn" class="btn-secondary">导入配置</button>
-      <input type="file" id="fileInput" accept=".json">
+  <div class="page">
+    <div class="topbar">
+      <div class="topbar-title">
+        <h1>AI 助手配置</h1>
+        <p>更大的编辑空间与结构化布局，快速完成模型与提示词配置。</p>
+      </div>
+      <div class="btn-group">
+        <button id="exportBtn" class="btn btn-secondary">导出配置</button>
+        <button id="importBtn" class="btn btn-ghost">导入配置</button>
+        <input type="file" id="fileInput" accept=".json">
+      </div>
     </div>
-  </h2>
 
-  <div class="section">
-    <span class="section-title">1. 模型管理</span>
-    <label>当前使用的模型</label>
-    <select id="activeModelSelect"></select>
+    <div class="layout">
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">模型管理 <span class="chip">Models</span></span>
+        </div>
+        <label>当前使用的模型</label>
+        <select id="activeModelSelect"></select>
 
-    <label style="margin-top: 15px;">已保存的模型</label>
-    <div class="model-list" id="modelList"></div>
+        <label style="margin-top: 8px;">已保存的模型</label>
+        <div class="model-list" id="modelList"></div>
 
-    <div class="add-form" id="modelForm">
-      <label id="formTitle">添加新模型</label>
-      <div class="form-row">
-        <div class="form-col"><input type="text" id="newLabel" placeholder="显示名称 (例如: 我的 DeepSeek)"></div>
-        <div class="form-col">
-          <select id="newType">
-            <option value="openai">OpenAI 兼容 (DeepSeek/Doubao)</option>
-            <option value="google">Google Gemini</option>
-          </select>
+        <div class="add-form" id="modelForm">
+          <label id="formTitle">添加新模型</label>
+          <div class="form-row">
+            <div><input type="text" id="newLabel" placeholder="显示名称 (例如: 我的 DeepSeek)"></div>
+            <div>
+              <select id="newType">
+                <option value="openai">OpenAI 兼容 (DeepSeek/Doubao)</option>
+                <option value="google">Google Gemini</option>
+              </select>
+            </div>
+          </div>
+          <input type="text" id="newUrl" placeholder="API 接口地址 (Endpoint URL)">
+          <div class="form-row">
+            <div><input type="text" id="newModelName" placeholder="模型名称 (例如: deepseek-chat)"></div>
+            <div><input type="password" id="newKey" placeholder="API 密钥 (Key)"></div>
+          </div>
+
+          <div class="form-actions">
+            <button class="action-btn btn-save-model" id="saveModelBtn">添加到列表</button>
+            <button class="action-btn btn-cancel" id="cancelEditBtn">取消编辑</button>
+          </div>
         </div>
       </div>
-      <input type="text" id="newUrl" placeholder="API 接口地址 (Endpoint URL)">
-      <div class="form-row">
-        <div class="form-col"><input type="text" id="newModelName" placeholder="模型名称 (例如: deepseek-chat)"></div>
-        <div class="form-col"><input type="password" id="newKey" placeholder="API 密钥 (Key)"></div>
-      </div>
 
-      <div class="form-actions">
-        <button class="action-btn btn-save-model" id="saveModelBtn">添加到列表</button>
-        <button class="action-btn btn-cancel" id="cancelEditBtn">取消编辑</button>
+      <div class="right-stack">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">推理参数 <span class="chip">Tuning</span></span>
+          </div>
+          <div class="param-row">
+            <div>
+              <label>翻译随机性 (Trans Temp, 默认 0.3)</label>
+              <input type="number" id="transTemperature" step="0.1" min="0" max="2">
+            </div>
+            <div>
+              <label>对话随机性 (Chat Temp, 默认 0.7)</label>
+              <input type="number" id="chatTemperature" step="0.1" min="0" max="2">
+            </div>
+          </div>
+          <div class="param-row single">
+            <div>
+              <label>最大回复长度 (Max Tokens, 默认 8192)</label>
+              <input type="number" id="maxTokens" step="128" min="128">
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">提示词模版 <span class="chip">Prompt</span></span>
+          </div>
+          <label>翻译模式提示词</label>
+          <textarea id="translatePrompt" rows="4"></textarea>
+          <label style="margin-top:8px;">对话/解释模式提示词</label>
+          <textarea id="chatPrompt" rows="4"></textarea>
+        </div>
       </div>
     </div>
-  </div>
 
-  <div class="section">
-    <span class="section-title">2. 推理参数</span>
-    <div class="param-row">
-      <div class="param-group">
-        <label>翻译随机性 (Trans Temp, 默认 0.3)</label>
-        <input type="number" id="transTemperature" step="0.1" min="0" max="2">
-      </div>
-      <div class="param-group">
-        <label>对话随机性 (Chat Temp, 默认 0.7)</label>
-        <input type="number" id="chatTemperature" step="0.1" min="0" max="2">
-      </div>
-    </div>
-    <div class="param-row">
-      <div class="param-group">
-        <label>最大回复长度 (Max Tokens, 默认 8192)</label>
-        <input type="number" id="maxTokens" step="128" min="128">
-      </div>
-    </div>
+    <button class="primary" id="save">保存所有设置</button>
+    <div id="status"></div>
+    <script src="options.js"></script>
   </div>
-
-  <div class="section">
-    <span class="section-title">3. 提示词模版 (Prompt)</span>
-    <label>翻译模式提示词</label>
-    <textarea id="translatePrompt" rows="3"></textarea>
-    <label style="margin-top:10px;">对话/解释模式提示词</label>
-    <textarea id="chatPrompt" rows="3"></textarea>
-  </div>
-
-  <button class="primary" id="save">保存所有设置</button>
-  <div id="status"></div>
-  <script src="options.js"></script>
 </body>
 </html>

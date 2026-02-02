@@ -49,8 +49,22 @@ async function processAIRequest(msg, port) {
   }
 }
 
+function buildGoogleGenAIUrl(config) {
+  const raw = (config.url || '').trim();
+  const model = (config.model || '').trim();
+  if (!raw) return '';
+  if (raw.includes('/models/') && raw.includes(':')) return raw;
+  if (!model) return raw;
+  let base = raw.endsWith('/') ? raw.slice(0, -1) : raw;
+  if (base.endsWith('/models')) base = base.slice(0, -('/models'.length));
+  return `${base}/models/${model}:streamGenerateContent`;
+}
+
 async function handleGoogleGenAI(config, messages, settings, port) {
-  const urlWithKey = `${config.url}?key=${config.key}`;
+  const apiUrl = buildGoogleGenAIUrl(config);
+  if (!apiUrl) throw new Error("Google API 地址未配置。");
+  if (!config.key) throw new Error("Google API Key 未配置。");
+  const urlWithKey = `${apiUrl}?key=${config.key}`;
   const geminiContents = messages.map(m => ({
     role: (m.role === 'assistant' ? 'model' : 'user'),
     parts: [{ text: m.content }]
