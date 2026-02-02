@@ -1,0 +1,33 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Local assistant metadata
+.claude/
+
+# Node / tooling (if added later)
+node_modules/
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+
+# Build / artifacts
+/dist/
+/build/
+
+# Secrets
+.env
+.env.*
+
+# Chrome extensions
+*.crx
+*.pem
+
+# Local exports
+*.zip

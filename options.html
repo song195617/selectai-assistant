@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AI 助手配置</title>
+  <style>
+    body { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; padding: 25px; width: 600px; color: #333; background-color: #f8f9fa; }
+    h2 { margin-top: 0; font-size: 20px; border-bottom: 2px solid #007bff; padding-bottom: 10px; color: #007bff; display: flex; justify-content: space-between; align-items: center; }
+
+    .btn-group { display: flex; gap: 10px; }
+    .btn-secondary { background: #6c757d; font-size: 12px; padding: 5px 10px; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    .btn-secondary:hover { background: #5a6268; }
+
+    .section { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
+    .section-title { font-weight: bold; margin-bottom: 10px; font-size: 14px; color: #555; display: block; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+
+    label { display: block; font-weight: 600; margin-bottom: 5px; font-size: 13px; }
+    input, select, textarea { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; font-size: 13px; margin-bottom: 10px; }
+    textarea { font-family: Consolas, monospace; font-size: 12px; resize: vertical; }
+
+    .model-list { border: 1px solid #eee; border-radius: 4px; max-height: 150px; overflow-y: auto; margin-bottom: 15px; }
+    .model-item { padding: 8px 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; font-size: 13px; background: #fff; }
+    .model-item:last-child { border-bottom: none; }
+    .model-info { display: flex; flex-direction: column; }
+    .model-name { font-weight: 600; color: #333; }
+    .model-sub { font-size: 11px; color: #888; }
+
+    .item-actions { display: flex; gap: 8px; }
+    .btn-icon { cursor: pointer; font-size: 16px; color: #666; transition: color 0.2s; }
+    .btn-edit:hover { color: #007bff; }
+    .btn-delete:hover { color: #dc3545; }
+
+    .add-form { background: #f1f3f5; padding: 10px; border-radius: 4px; border: 1px solid transparent; transition: border-color 0.3s; }
+    .add-form.editing { border-color: #007bff; background-color: #e7f1ff; }
+
+    .form-row { display: flex; gap: 10px; }
+    .form-col { flex: 1; }
+    .param-row { display: flex; gap: 15px; margin-bottom: 10px; }
+    .param-group { flex: 1; }
+
+    button.primary { background: #007bff; color: white; border: none; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: 600; width: 100%; margin-top: 10px; }
+    button.primary:hover { background: #0056b3; }
+
+    .form-actions { display: flex; gap: 10px; margin-top: 10px; }
+    button.action-btn { flex: 1; border: none; padding: 8px; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 12px; }
+    button.btn-save-model { background: #28a745; color: white; }
+    button.btn-save-model:hover { background: #218838; }
+    button.btn-cancel { background: #6c757d; color: white; display: none; }
+    button.btn-cancel:hover { background: #5a6268; }
+
+    #status { margin-top: 15px; text-align: center; font-size: 13px; min-height: 20px; font-weight: 500; }
+    #fileInput { display: none; }
+  </style>
+</head>
+<body>
+  <h2>
+    AI 助手配置
+    <div class="btn-group">
+      <button id="exportBtn" class="btn-secondary">导出配置</button>
+      <button id="importBtn" class="btn-secondary">导入配置</button>
+      <input type="file" id="fileInput" accept=".json">
+    </div>
+  </h2>
+
+  <div class="section">
+    <span class="section-title">1. 模型管理</span>
+    <label>当前使用的模型</label>
+    <select id="activeModelSelect"></select>
+
+    <label style="margin-top: 15px;">已保存的模型</label>
+    <div class="model-list" id="modelList"></div>
+
+    <div class="add-form" id="modelForm">
+      <label id="formTitle">添加新模型</label>
+      <div class="form-row">
+        <div class="form-col"><input type="text" id="newLabel" placeholder="显示名称 (例如: 我的 DeepSeek)"></div>
+        <div class="form-col">
+          <select id="newType">
+            <option value="openai">OpenAI 兼容 (DeepSeek/Doubao)</option>
+            <option value="google">Google Gemini</option>
+          </select>
+        </div>
+      </div>
+      <input type="text" id="newUrl" placeholder="API 接口地址 (Endpoint URL)">
+      <div class="form-row">
+        <div class="form-col"><input type="text" id="newModelName" placeholder="模型名称 (例如: deepseek-chat)"></div>
+        <div class="form-col"><input type="password" id="newKey" placeholder="API 密钥 (Key)"></div>
+      </div>
+
+      <div class="form-actions">
+        <button class="action-btn btn-save-model" id="saveModelBtn">添加到列表</button>
+        <button class="action-btn btn-cancel" id="cancelEditBtn">取消编辑</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <span class="section-title">2. 推理参数</span>
+    <div class="param-row">
+      <div class="param-group">
+        <label>翻译随机性 (Trans Temp, 默认 0.3)</label>
+        <input type="number" id="transTemperature" step="0.1" min="0" max="2">
+      </div>
+      <div class="param-group">
+        <label>对话随机性 (Chat Temp, 默认 0.7)</label>
+        <input type="number" id="chatTemperature" step="0.1" min="0" max="2">
+      </div>
+    </div>
+    <div class="param-row">
+      <div class="param-group">
+        <label>最大回复长度 (Max Tokens, 默认 8192)</label>
+        <input type="number" id="maxTokens" step="128" min="128">
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <span class="section-title">3. 提示词模版 (Prompt)</span>
+    <label>翻译模式提示词</label>
+    <textarea id="translatePrompt" rows="3"></textarea>
+    <label style="margin-top:10px;">对话/解释模式提示词</label>
+    <textarea id="chatPrompt" rows="3"></textarea>
+  </div>
+
+  <button class="primary" id="save">保存所有设置</button>
+  <div id="status"></div>
+  <script src="options.js"></script>
+</body>
+</html>

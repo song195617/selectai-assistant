@@ -1,0 +1,83 @@
+#ai-btn-container {
+  display: flex; gap: 8px; animation: fadeIn 0.2s;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+.ai-float-btn {
+  width: 32px; height: 32px; background: white;
+  border: 1px solid #e0e0e0; border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  color: #4285F4; transition: transform 0.2s, background 0.2s;
+}
+.ai-float-btn:hover { transform: scale(1.1); background: #f8f9fa; color: #0056b3; }
+
+#ai-assist-popup {
+  width: 525px; background: white; border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.25); border: 1px solid #e0e0e0;
+  display: flex; flex-direction: column; overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  animation: fadeIn 0.2s ease-out; text-align: left; line-height: normal;
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+#ai-popup-header {
+  padding: 12px 15px; background: #f8f9fa; border-bottom: 1px solid #eee;
+  display: flex; justify-content: space-between; align-items: center;
+  font-weight: 600; color: #555; font-size: 15px; cursor: move; user-select: none;
+}
+#ai-header-title-wrapper { display: flex; align-items: center; gap: 8px; }
+.ai-status-icon { width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; }
+
+@keyframes ai-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+.ai-status-loading svg { animation: ai-spin 1s linear infinite; color: #007bff; }
+.ai-status-done { color: #28a745; animation: fadeIn 0.3s; }
+.ai-status-error { color: #dc3545; }
+
+#ai-header-actions { display: flex; align-items: center; gap: 15px; }
+#ai-popup-pin { cursor: pointer; color: #aaa; font-size: 18px; transition: color 0.2s; }
+#ai-popup-pin:hover { color: #555; }
+#ai-popup-close {
+  cursor: pointer; color: #888; font-size: 24px; width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 4px; font-weight: bold; transition: background 0.2s, color 0.2s;
+}
+#ai-popup-close:hover { color: #333; background-color: #e9ecef; }
+
+#ai-popup-stop {
+  display: none; align-items: center; justify-content: center;
+  color: #d32f2f; cursor: pointer; width: 28px; height: 28px;
+  border-radius: 4px; background-color: #ffebee; transition: background 0.2s;
+}
+#ai-popup-stop:hover { background-color: #ffcdd2; }
+
+#ai-popup-content {
+  padding: 15px; overflow-y: auto; font-size: 15px; line-height: 1.6; color: #333;
+  min-height: 100px; max-height: 500px;
+}
+.chat-mode { height: 450px; background: #fdfdfd; }
+
+.ai-msg { margin-bottom: 12px; padding: 10px; border-radius: 8px; word-wrap: break-word; }
+.ai-msg-user { background: #e3f2fd; color: #0d47a1; align-self: flex-end; margin-left: 20%; border-bottom-right-radius: 2px; }
+.ai-msg-assistant { background: white; border: 1px solid #eee; margin-right: 5%; border-bottom-left-radius: 2px; }
+
+#ai-popup-footer { padding: 10px; border-top: 1px solid #eee; display: flex; background: white; gap: 8px; }
+#ai-chat-input {
+  flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 20px; outline: none; font-size: 14px;
+}
+#ai-chat-input:focus { border-color: #4285F4; }
+#ai-chat-send {
+  background: #4285F4; color: white; border: none; border-radius: 50%;
+  width: 32px; height: 32px; cursor: pointer; font-size: 12px;
+  display: flex; align-items: center; justify-content: center;
+}
+#ai-chat-send:hover { background: #3367d6; }
+
+#ai-popup-content::-webkit-scrollbar { width: 6px; }
+#ai-popup-content::-webkit-scrollbar-thumb { background: #ccc; border-radius: 4px; }
+#ai-popup-content p { margin: 0 0 10px 0; }
+#ai-popup-content pre {
+  background: #f4f6f8; padding: 8px; border-radius: 4px;
+  overflow-x: auto; font-family: monospace; border: 1px solid #eee;
+}
+.ai-loading, .ai-loading-dots { color: #888; font-style: italic; }
+.ai-error { color: #d32f2f; background: #fff5f5; padding: 10px; border-radius: 4px; font-size: 13px; }

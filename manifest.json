@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Universal AI Assistant",
+  "version": "1.0",
+  "description": "AI 助手：支持翻译、对话、公式渲染与流式响应。",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "lib/marked.umd.min.js",
+        "lib/purify.min.js",
+        "lib/katex.min.js",
+        "content.js"
+      ],
+      "run_at": "document_end"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["content.css", "icon.png"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}

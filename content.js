@@ -1,0 +1,407 @@
+// --- Constants & Globals ---
+const KATEX_CSS_URL = "https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css";
+const CRITICAL_BTN_CSS = `
+  #ai-btn-container { display: flex; gap: 8px; position: absolute; z-index: 1000; font-family: sans-serif; pointer-events: auto; }
+  .ai-float-btn { width: 32px; height: 32px; background: white; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); cursor: pointer; display: flex; align-items: center; justify-content: center; color: #4285F4; transition: transform 0.1s; }
+  .ai-float-btn:hover { transform: scale(1.1); background: #f0f0f0; }
+  #ai-popup-stop { display: none; align-items: center; justify-content: center; color: #d32f2f; cursor: pointer; width: 28px; height: 28px; border-radius: 4px; background-color: #ffebee; transition: background 0.2s; }
+  #ai-popup-stop:hover { background-color: #ffcdd2; }
+`;
+const ICON_LOADING = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path></svg>`;
+const ICON_DONE = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg>`;
+const ICON_ERROR = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`;
+const ICON_STOP = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect></svg>`;
+
+let shadowHost = null, shadowRoot = null, iconContainer = null, popup = null, resizeObserver = null;
+let currentSelection = '', port = null, lastMouseX = 0, lastMouseY = 0;
+let isDragging = false, dragOffsetX = 0, dragOffsetY = 0, isFixed = true;
+let isChatMode = false, chatHistory = [], currentStreamingMessage = '';
+
+// --- Initialization ---
+
+async function getShadowRoot() {
+  if (shadowRoot) { updateHostSize(); return shadowRoot; }
+  shadowHost = document.createElement('div');
+  shadowHost.id = 'ai-assistant-host';
+  shadowHost.style.cssText = `position: absolute; top: 0; left: 0; width: 100%; z-index: 2147483647; pointer-events: none;`;
+  shadowRoot = shadowHost.attachShadow({ mode: 'open' });
+
+  injectStyle(CRITICAL_BTN_CSS);
+  await injectExternalStyle(KATEX_CSS_URL);
+  await injectExternalStyle(chrome.runtime.getURL('content.css'));
+
+  document.documentElement.appendChild(shadowHost);
+  updateHostSize();
+  return shadowRoot;
+}
+
+function injectStyle(cssContent) {
+  const style = document.createElement('style');
+  style.textContent = cssContent;
+  shadowRoot.appendChild(style);
+}
+
+async function injectExternalStyle(url) {
+  try {
+    const res = await fetch(url);
+    const css = await res.text();
+    injectStyle(css);
+  } catch(e) { console.warn(`Failed to load CSS: ${url}`); }
+}
+
+function updateHostSize() {
+  if (!shadowHost) return;
+  const docHeight = Math.max(
+    document.body.scrollHeight, document.documentElement.scrollHeight,
+    document.body.offsetHeight, document.documentElement.offsetHeight
+  );
+  shadowHost.style.height = `${docHeight}px`;
+}
+
+// --- Event Listeners ---
+
+document.addEventListener('mouseup', (e) => {
+  const target = e.target;
+  if (['INPUT', 'TEXTAREA'].includes(target.tagName) || target.isContentEditable) return;
+  if (e.composedPath().some(el => el === shadowHost)) return;
+  if (isDragging) { isDragging = false; return; }
+
+  lastMouseX = e.pageX; lastMouseY = e.pageY;
+  setTimeout(() => {
+    const text = window.getSelection().toString().trim();
+    if (text.length > 0) { currentSelection = text; showButtons(lastMouseX, lastMouseY); }
+    else hideButtons();
+  }, 10);
+});
+
+document.addEventListener('mousedown', (e) => {
+  if (!e.composedPath().some(el => el === shadowHost)) hideButtons();
+});
+
+// --- UI Components ---
+
+async function showButtons(x, y) {
+  const root = await getShadowRoot();
+  if (!iconContainer) {
+    iconContainer = document.createElement('div');
+    iconContainer.id = 'ai-btn-container';
+    const iconTranslate = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"></path></svg>`;
+    const iconChat = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>`;
+    iconContainer.appendChild(createFloatBtn("翻译/解释", iconTranslate, () => initPopup('translate')));
+    iconContainer.appendChild(createFloatBtn("AI 对话", iconChat, () => initPopup('chat')));
+    root.appendChild(iconContainer);
+  }
+  iconContainer.style.display = 'flex';
+  iconContainer.style.left = `${x + 10}px`;
+  iconContainer.style.top = `${y + 10}px`;
+}
+
+function createFloatBtn(title, svg, onClick) {
+  const btn = document.createElement('div');
+  btn.className = 'ai-float-btn';
+  btn.title = title;
+  btn.innerHTML = svg;
+  btn.onmousedown = (e) => e.stopPropagation();
+  btn.onclick = (e) => { e.stopPropagation(); onClick(); };
+  return btn;
+}
+
+function hideButtons() { if (iconContainer) iconContainer.style.display = 'none'; }
+
+async function initPopup(mode) {
+  const rect = iconContainer.getBoundingClientRect();
+  hideButtons();
+  await getShadowRoot();
+  createPopupFrame(rect, mode);
+
+  if (mode === 'translate') { isChatMode = false; startTranslation(); }
+  else { isChatMode = true; chatHistory = []; addChatMessage('user', currentSelection); sendChatRequest(); }
+}
+
+function createPopupFrame(targetRect, mode) {
+  if (popup) { handleStop(); if (resizeObserver) resizeObserver.disconnect(); popup.remove(); }
+
+  isFixed = true;
+  currentStreamingMessage = '';
+
+  popup = document.createElement('div');
+  popup.id = 'ai-assist-popup';
+  popup.style.pointerEvents = 'auto';
+
+  // --- Positioning & Sizing Logic ---
+  const popupWidth = 525;
+  const { innerHeight: windowH, innerWidth: windowW } = window;
+  const safeMarginTop = windowH * 0.1;
+  const safeMarginBottom = windowH * 0.9;
+  const maxTotalHeight = safeMarginBottom - safeMarginTop;
+
+  let left = targetRect.left;
+  if (left + popupWidth > windowW) left = windowW - popupWidth - 20;
+
+  let top = targetRect.bottom + 10;
+  let transform = 'translateY(0)';
+
+  // Flip if not enough space below
+  if (top + 200 > safeMarginBottom) { top = targetRect.top - 10; transform = 'translateY(-100%)'; }
+  // Clamp to safe area
+  if (transform === 'translateY(0)' && top > safeMarginBottom) top = safeMarginBottom - 200;
+  if (transform === 'translateY(-100%)' && top < safeMarginTop) top = safeMarginTop + 200;
+
+  popup.style.position = 'fixed';
+  popup.style.left = `${left}px`;
+  popup.style.top = `${top}px`;
+  popup.style.transform = transform;
+
+  const title = mode === 'translate' ? 'AI 翻译' : 'AI 对话';
+  const footerHtml = mode === 'chat' ? `
+    <div id="ai-popup-footer">
+      <input type="text" id="ai-chat-input" placeholder="输入问题..." />
+      <button id="ai-chat-send">➤</button>
+    </div>` : '';
+
+  popup.innerHTML = `
+    <div id="ai-popup-header">
+      <div id="ai-header-title-wrapper">
+        <span id="ai-title-icon" class="ai-status-icon"></span>
+        <span id="ai-header-text">${title}</span>
+      </div>
+      <div id="ai-header-actions">
+        <span id="ai-popup-stop" title="停止生成">${ICON_STOP}</span>
+        <span id="ai-popup-pin" title="固定/跟随" style="font-weight:bold;">📌</span>
+        <span id="ai-popup-close" title="关闭">✕</span>
+      </div>
+    </div>
+    <div id="ai-popup-content" class="${mode === 'chat' ? 'chat-mode' : ''}"></div>
+    ${footerHtml}
+  `;
+
+  // Apply Max Height constraint
+  const headerHeight = 50, footerHeight = mode === 'chat' ? 50 : 0;
+  const contentMaxHeight = maxTotalHeight - headerHeight - footerHeight;
+  popup.querySelector('#ai-popup-content').style.maxHeight = `${Math.min(500, contentMaxHeight)}px`;
+
+  shadowRoot.appendChild(popup);
+
+  // ResizeObserver for reverse growth
+  if (transform === 'translateY(0)') {
+    resizeObserver = new ResizeObserver(entries => {
+      for (let entry of entries) {
+        if (!popup) return;
+        const rect = popup.getBoundingClientRect();
+        if (rect.bottom > safeMarginBottom) {
+          const overflow = rect.bottom - safeMarginBottom;
+          let newTop = parseFloat(popup.style.top) - overflow;
+          if (newTop < safeMarginTop) newTop = safeMarginTop;
+          popup.style.top = `${newTop}px`;
+        }
+      }
+    });
+    resizeObserver.observe(popup);
+  }
+
+  // Bind UI Events
+  popup.querySelector('#ai-popup-close').onclick = () => { handleStop(); if(resizeObserver) resizeObserver.disconnect(); popup.remove(); };
+  popup.querySelector('#ai-popup-stop').onclick = (e) => { e.stopPropagation(); handleStop(); };
+  popup.querySelector('#ai-popup-pin').onclick = togglePositionMode;
+  popup.querySelector('#ai-popup-header').onmousedown = initDrag;
+
+  if (mode === 'chat') {
+    const btnSend = popup.querySelector('#ai-chat-send');
+    const inputMsg = popup.querySelector('#ai-chat-input');
+    btnSend.onclick = handleUserSubmit;
+    inputMsg.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') handleUserSubmit(); };
+    setTimeout(() => inputMsg.focus(), 100);
+  }
+}
+
+// --- Logic: Markdown & KaTeX ---
+
+function renderText(text) {
+  if (!text) return '';
+  const mathBlocks = [];
+  const protectMath = (regex, isDisplay) => {
+    text = text.replace(regex, (_, tex) => {
+      mathBlocks.push({ tex, display: isDisplay });
+      return `MathPlaceholder${mathBlocks.length - 1}End`;
+    });
+  };
+
+  protectMath(/\$\$([\s\S]+?)\$\$/g, true);
+  protectMath(/\\\[([\s\S]+?)\\\]/g, true);
+  protectMath(/\\\(([\s\S]+?)\\\)/g, false);
+  protectMath(/\$([^\$\s](?:[^$]*[^\s])?)\$/g, false);
+
+  let html = marked.parse(text);
+
+  html = html.replace(/MathPlaceholder(\d+)End/g, (_, index) => {
+    const item = mathBlocks[index];
+    try { return katex.renderToString(item.tex, { displayMode: item.display, throwOnError: false, fleqn: false }); }
+    catch(e) { return item.tex; }
+  });
+
+  return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html, {
+    ADD_TAGS: ['math', 'annotation', 'semantics', 'mtext', 'mn', 'mo', 'mi', 'jsp', 'span', 'table', 'tr', 'td', 'th', 'thead', 'tbody'],
+    ADD_ATTR: ['class', 'style', 'aria-hidden', 'viewBox', 'd', 'fill', 'stroke', 'stroke-width']
+  }) : html;
+}
+
+// --- Logic: Status & Networking ---
+
+function updateTitleStatus(state) {
+  if (!popup) return;
+  const iconEl = popup.querySelector('#ai-title-icon');
+  const stopBtn = popup.querySelector('#ai-popup-stop');
+  if (!iconEl || !stopBtn) return;
+
+  iconEl.className = 'ai-status-icon'; iconEl.innerHTML = '';
+  if (state === 'loading') {
+    iconEl.innerHTML = ICON_LOADING; iconEl.classList.add('ai-status-loading');
+    stopBtn.style.display = 'flex';
+  } else {
+    if (state === 'done') { iconEl.innerHTML = ICON_DONE; iconEl.classList.add('ai-status-done'); }
+    else if (state === 'error') { iconEl.innerHTML = ICON_ERROR; iconEl.classList.add('ai-status-error'); }
+    stopBtn.style.display = 'none';
+  }
+}
+
+function handleStop() {
+  if (port) { port.disconnect(); port = null; }
+  updateTitleStatus('done');
+  const el = popup ? popup.querySelector('#ai-popup-content') : null;
+  if (el) {
+    const loader = el.querySelector('.ai-loading-dots') || el.querySelector('.ai-loading');
+    if (loader) loader.remove();
+  }
+}
+
+function connectAndSend(payload, onChunk, onDone, onError) {
+  if (port) port.disconnect();
+  port = chrome.runtime.connect({ name: 'ai-stream' });
+  port.postMessage(payload);
+
+  port.onMessage.addListener((msg) => {
+    if (!popup) return;
+    if (msg.type === 'chunk') {
+      if (isChatMode && onChunk) onChunk(msg.content);
+      else if (!isChatMode) {
+        const el = popup.querySelector('#ai-popup-content');
+        const shouldScroll = isNearBottom(el);
+        if (el.querySelector('.ai-loading')) el.innerHTML = '';
+        currentStreamingMessage += msg.content;
+        el.innerHTML = renderText(currentStreamingMessage);
+        if (shouldScroll) scrollToBottom(el);
+      }
+    } else if (msg.type === 'error') {
+      updateTitleStatus('error');
+      if (onError) onError(msg.content);
+      else popup.querySelector('#ai-popup-content').innerHTML = `<div class="ai-error">Error: ${msg.content}</div>`;
+    } else if (msg.type === 'done') {
+      if (!isChatMode) updateTitleStatus('done');
+      if (onDone) onDone();
+      port.disconnect();
+    }
+  });
+}
+
+function startTranslation() {
+  popup.querySelector('#ai-popup-content').innerHTML = '<div class="ai-loading">思考中...</div>';
+  updateTitleStatus('loading');
+  connectAndSend({ action: 'translate', text: currentSelection });
+}
+
+function sendChatRequest() {
+  const container = popup.querySelector('#ai-popup-content');
+  const responseDiv = addChatMessage('assistant', '');
+  const loadingSpan = document.createElement('span');
+  loadingSpan.className = 'ai-loading-dots'; loadingSpan.textContent = '...';
+  responseDiv.appendChild(loadingSpan);
+
+  currentStreamingMessage = '';
+  updateTitleStatus('loading');
+
+  connectAndSend({ action: 'chat', text: '', history: chatHistory.slice(0, -1) },
+    (chunk) => {
+      const shouldScroll = isNearBottom(container);
+      loadingSpan.remove();
+      currentStreamingMessage += chunk;
+      responseDiv.innerHTML = renderText(currentStreamingMessage);
+      if (shouldScroll) scrollToBottom(container);
+    },
+    () => {
+      updateTitleStatus('done');
+      if (chatHistory.length > 0) chatHistory[chatHistory.length-1].content = currentStreamingMessage;
+    },
+    (errMsg) => {
+      updateTitleStatus('error');
+      chatHistory.pop(); loadingSpan.remove();
+      const errDiv = document.createElement('div');
+      errDiv.className = 'ai-error'; errDiv.textContent = `Error: ${errMsg}`;
+      responseDiv.appendChild(errDiv);
+      scrollToBottom(container);
+    }
+  );
+}
+
+function handleUserSubmit() {
+  const inputEl = popup.querySelector('#ai-chat-input');
+  const text = inputEl.value.trim();
+  if (!text) return;
+  inputEl.value = '';
+  addChatMessage('user', text);
+  sendChatRequest();
+}
+
+function addChatMessage(role, text) {
+  const container = popup.querySelector('#ai-popup-content');
+  const msgDiv = document.createElement('div');
+  msgDiv.className = `ai-msg ai-msg-${role}`;
+  if (text) msgDiv.innerHTML = role === 'user' ? escapeHtml(text) : renderText(text);
+  chatHistory.push({ role, content: text });
+  container.appendChild(msgDiv);
+  scrollToBottom(container);
+  return msgDiv;
+}
+
+// --- Utils ---
+
+function isNearBottom(el) { return el.scrollHeight <= el.clientHeight || (el.scrollTop + el.clientHeight) >= (el.scrollHeight - 50); }
+function scrollToBottom(el) { if(el) el.scrollTop = el.scrollHeight; }
+function escapeHtml(text) { return text.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;','\'':'&#039;'}[m])); }
+
+function togglePositionMode() {
+  if (!popup) return;
+  const rect = popup.getBoundingClientRect();
+  isFixed = !isFixed;
+  popup.style.transform = 'none';
+  popup.querySelector('#ai-popup-pin').style.opacity = isFixed ? '1' : '0.5';
+
+  if (isFixed) { popup.style.position = 'fixed'; popup.style.left = `${rect.left}px`; popup.style.top = `${rect.top}px`; }
+  else { popup.style.position = 'absolute'; popup.style.left = `${rect.left + window.scrollX}px`; popup.style.top = `${rect.top + window.scrollY}px`; }
+}
+
+function initDrag(e) {
+  isDragging = true;
+  const rect = popup.getBoundingClientRect();
+  dragOffsetX = e.clientX - rect.left; dragOffsetY = e.clientY - rect.top;
+  popup.style.transform = 'none';
+
+  const setPos = (x, y) => {
+    popup.style.left = `${x}px`; popup.style.top = `${y}px`;
+  };
+
+  if (isFixed) setPos(rect.left, rect.top);
+  else setPos(rect.left + window.scrollX, rect.top + window.scrollY);
+
+  const doDrag = (ev) => {
+    ev.preventDefault();
+    if (isFixed) setPos(ev.clientX - dragOffsetX, ev.clientY - dragOffsetY);
+    else setPos(ev.clientX - dragOffsetX + window.scrollX, ev.clientY - dragOffsetY + window.scrollY);
+  };
+  const stopDrag = () => {
+    isDragging = false;
+    document.removeEventListener('mousemove', doDrag);
+    document.removeEventListener('mouseup', stopDrag);
+  };
+  document.addEventListener('mousemove', doDrag);
+  document.addEventListener('mouseup', stopDrag);
+}
