@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Universal AI Assistant",
+  "name": "SelectAI Assistant",
   "version": "1.0",
   "description": "AI 助手：支持翻译、对话、公式渲染与流式响应。",
   "permissions": [

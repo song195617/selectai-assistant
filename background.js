@@ -1,5 +1,7 @@
 const activeRequests = new WeakMap();
 const PROVIDER_TEST_TIMEOUT_MS = 15000;
+const DEFAULT_TRANSLATE_PROMPT = '你是一位精通多国语言的资深翻译专家、语言学家和跨文化交流顾问。你不仅擅长将文本从源语言精准翻译成中文，也擅长将中文表达的文本精准地道地翻译成英文，还能敏锐地识别文本类型（单词、句子、段落或长文），并根据不同类型提供深度解析。';
+const DEFAULT_CHAT_PROMPT = '你是一位博古通今、风趣幽默的“老教授”，同时也是用户多年的“老朋友”。你拥有海量的知识储备（涵盖科技、人文、历史、语言学等），但你从不掉书袋。你的特长是用最通俗易懂、深入浅出的语言，把复杂的事情讲清楚。你就像在咖啡馆里和老友聊天一样，语气亲切、平和，偶尔带点智慧的幽默。';
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.action !== 'test-provider-connectivity') return;
@@ -49,6 +51,19 @@ function tryPostMessage(port, payload) {
   }
 }
 
+function composePromptWithSelectedText(prompt, selectedText, fallbackPrompt = '') {
+  const rawPrompt = typeof prompt === 'string' ? prompt.trim() : '';
+  const defaultPrompt = typeof fallbackPrompt === 'string' ? fallbackPrompt.trim() : '';
+  const basePrompt = rawPrompt || defaultPrompt;
+  const text = typeof selectedText === 'string' ? selectedText.trim() : '';
+  if (!text) return basePrompt;
+  if (!basePrompt) return text;
+  if (basePrompt.includes('{text}')) {
+    return basePrompt.split('{text}').join(text);
+  }
+  return `${basePrompt}\n\n${text}`;
+}
+
 async function processAIRequest(msg, port) {
   let controller = null;
   try {
@@ -69,11 +84,12 @@ async function processAIRequest(msg, port) {
     let activeTemperature = settings.transTemperature;
 
     if (msg.action === 'translate') {
-      const systemContent = settings.translatePrompt.replace('{text}', msg.text);
-      messages = [{ role: 'user', content: systemContent }];
+      const translateContent = composePromptWithSelectedText(settings.translatePrompt, msg.text, DEFAULT_TRANSLATE_PROMPT);
+      messages = [{ role: 'user', content: translateContent }];
       activeTemperature = settings.transTemperature;
     } else if (msg.action === 'chat') {
-      if (settings.chatPrompt) messages.push({ role: 'system', content: settings.chatPrompt });
+      const chatSystemContent = composePromptWithSelectedText(settings.chatPrompt, msg.text, DEFAULT_CHAT_PROMPT);
+      if (chatSystemContent) messages.push({ role: 'system', content: chatSystemContent });
       if (msg.history && Array.isArray(msg.history)) {
         messages = messages.concat(msg.history.slice(-10)); // 限制上下文长度
       }

@@ -12,6 +12,7 @@ const ICON_DONE = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" s
 const ICON_ERROR = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`;
 const ICON_STOP = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect></svg>`;
 const PORT_DISCONNECT_DELAY_MS = 50;
+const THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)';
 
 let shadowHost = null, shadowRoot = null, iconContainer = null, popup = null, resizeObserver = null;
 let currentSelection = '', port = null, lastMouseX = 0, lastMouseY = 0;
@@ -43,6 +44,34 @@ function safeRuntimeGetURL(path) {
   } catch (error) {
     console.warn('Extension context invalidated while resolving URL:', path);
     return '';
+  }
+}
+
+function getEffectiveThemeMode(themeMode) {
+  if (themeMode === 'dark') return 'dark';
+  if (themeMode === 'light') return 'light';
+  if (!window.matchMedia) return 'light';
+  return window.matchMedia(THEME_MEDIA_QUERY).matches ? 'dark' : 'light';
+}
+
+function applyPopupTheme(targetPopup) {
+  if (!targetPopup) return;
+  const applyThemeClass = (themeMode) => {
+    if (!targetPopup || targetPopup !== popup) return;
+    const effectiveTheme = getEffectiveThemeMode(themeMode);
+    targetPopup.classList.toggle('theme-dark', effectiveTheme === 'dark');
+  };
+  try {
+    chrome.storage.sync.get({ themeMode: 'system' }, (items) => {
+      const runtimeErr = chrome.runtime && chrome.runtime.lastError;
+      if (runtimeErr) {
+        applyThemeClass('system');
+        return;
+      }
+      applyThemeClass(items.themeMode);
+    });
+  } catch (error) {
+    applyThemeClass('system');
   }
 }
 
@@ -192,6 +221,7 @@ function createPopupFrame(targetRect, mode) {
   popup.querySelector('#ai-popup-content').style.maxHeight = `${Math.min(500, contentMaxHeight)}px`;
 
   shadowRoot.appendChild(popup);
+  applyPopupTheme(popup);
 
   // ResizeObserver for reverse growth
   if (transform === 'translateY(0)') {
@@ -432,7 +462,7 @@ function sendChatRequest() {
   currentStreamingMessage = '';
   updateTitleStatus('loading');
 
-  connectAndSend({ action: 'chat', text: '', history: chatHistory.slice(0, -1) },
+  connectAndSend({ action: 'chat', text: currentSelection, history: chatHistory.slice(0, -1) },
     (chunk) => {
       const shouldScroll = isNearBottom(container);
       loadingSpan.remove();
