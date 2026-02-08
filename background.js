@@ -64,6 +64,24 @@ function composePromptWithSelectedText(prompt, selectedText, fallbackPrompt = ''
   return `${basePrompt}\n\n${text}`;
 }
 
+function buildTranslateMessages(prompt, selectedText, fallbackPrompt = '') {
+  const rawPrompt = typeof prompt === 'string' ? prompt.trim() : '';
+  const defaultPrompt = typeof fallbackPrompt === 'string' ? fallbackPrompt.trim() : '';
+  const basePrompt = rawPrompt || defaultPrompt;
+  const text = typeof selectedText === 'string' ? selectedText.trim() : '';
+
+  // Keep backward compatibility: if template uses {text}, preserve in-place interpolation.
+  if (basePrompt && basePrompt.includes('{text}')) {
+    return [{ role: 'user', content: basePrompt.split('{text}').join(text) }];
+  }
+
+  const messages = [];
+  if (basePrompt) messages.push({ role: 'system', content: basePrompt });
+  if (text) messages.push({ role: 'user', content: text });
+  if (messages.length === 0) messages.push({ role: 'user', content: '' });
+  return messages;
+}
+
 async function processAIRequest(msg, port) {
   let controller = null;
   try {
@@ -84,8 +102,7 @@ async function processAIRequest(msg, port) {
     let activeTemperature = settings.transTemperature;
 
     if (msg.action === 'translate') {
-      const translateContent = composePromptWithSelectedText(settings.translatePrompt, msg.text, DEFAULT_TRANSLATE_PROMPT);
-      messages = [{ role: 'user', content: translateContent }];
+      messages = buildTranslateMessages(settings.translatePrompt, msg.text, DEFAULT_TRANSLATE_PROMPT);
       activeTemperature = settings.transTemperature;
     } else if (msg.action === 'chat') {
       const chatSystemContent = composePromptWithSelectedText(settings.chatPrompt, msg.text, DEFAULT_CHAT_PROMPT);
@@ -284,10 +301,23 @@ async function handleGoogleGenAI(config, messages, settings, port) {
   if (!apiUrl) throw new Error("Google API 地址未配置。");
   if (!config.key) throw new Error("Google API Key 未配置。");
   const urlWithKey = `${apiUrl}?key=${config.key}`;
-  const geminiContents = messages.map(m => ({
-    role: (m.role === 'assistant' ? 'model' : 'user'),
-    parts: [{ text: m.content }]
-  }));
+  const systemParts = [];
+  const geminiContents = [];
+  for (const message of messages) {
+    const content = typeof message.content === 'string' ? message.content : '';
+    if (!content) continue;
+    if (message.role === 'system') {
+      systemParts.push({ text: content });
+      continue;
+    }
+    geminiContents.push({
+      role: (message.role === 'assistant' ? 'model' : 'user'),
+      parts: [{ text: content }]
+    });
+  }
+  if (geminiContents.length === 0) {
+    geminiContents.push({ role: 'user', parts: [{ text: '' }] });
+  }
 
   const payload = {
     contents: geminiContents,
@@ -296,6 +326,9 @@ async function handleGoogleGenAI(config, messages, settings, port) {
       maxOutputTokens: settings.maxTokens
     }
   };
+  if (systemParts.length > 0) {
+    payload.systemInstruction = { parts: systemParts };
+  }
 
   const response = await fetch(urlWithKey, {
     method: 'POST',
