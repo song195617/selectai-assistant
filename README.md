@@ -106,7 +106,6 @@ Web Page
 ## 权限与数据
 
 - `storage`: 存储模型配置、参数、主题和语言偏好。
-- `activeTab`: 当前标签页能力（扩展声明权限）。
 - `content_scripts` 匹配 `<all_urls>`，用于在网页中提供选中文本交互。
 
 数据流说明：

@@ -13,12 +13,46 @@ const ICON_ERROR = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" 
 const ICON_STOP = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect></svg>`;
 const PORT_DISCONNECT_DELAY_MS = 50;
 const THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)';
+const LANGUAGE_MODE_STORAGE_KEY = 'languageMode';
+const CONTENT_I18N = {
+  zh: {
+    btn_translate: '翻译/解释',
+    btn_chat: 'AI 对话',
+    title_translate: 'AI 翻译',
+    title_chat: 'AI 对话',
+    chat_input_placeholder: '输入问题...',
+    tooltip_stop: '停止生成',
+    tooltip_pin: '固定/跟随',
+    tooltip_close: '关闭',
+    thinking_loading: '思考中...',
+    model_no_content: '模型未返回内容。',
+    error_prefix: '错误:',
+    context_invalidated: '扩展上下文已失效（通常是扩展重载导致），请刷新当前页面后重试。',
+    request_failed: '请求失败。'
+  },
+  en: {
+    btn_translate: 'Translate/Explain',
+    btn_chat: 'AI Chat',
+    title_translate: 'AI Translate',
+    title_chat: 'AI Chat',
+    chat_input_placeholder: 'Ask a question...',
+    tooltip_stop: 'Stop',
+    tooltip_pin: 'Pin/Follow',
+    tooltip_close: 'Close',
+    thinking_loading: 'Thinking...',
+    model_no_content: 'Model returned no content.',
+    error_prefix: 'Error:',
+    context_invalidated: 'Extension context was invalidated (usually after reloading the extension). Refresh this page and try again.',
+    request_failed: 'Request failed.'
+  }
+};
 
 let shadowHost = null, shadowRoot = null, iconContainer = null, popup = null, resizeObserver = null;
 let currentSelection = '', port = null, lastMouseX = 0, lastMouseY = 0;
 let isDragging = false, dragOffsetX = 0, dragOffsetY = 0, isFixed = true;
 let isChatMode = false, chatHistory = [], currentStreamingMessage = '';
 let currentStreamingRawMessage = '', currentThinkingMessage = '';
+let currentLocale = resolveContentLocale('auto');
 
 // --- Initialization ---
 
@@ -49,6 +83,74 @@ function safeRuntimeGetURL(path) {
     console.warn('Extension context invalidated while resolving URL:', path);
     return '';
   }
+}
+
+function resolveContentLocale(languageMode) {
+  const mode = typeof languageMode === 'string' ? languageMode.trim().toLowerCase() : 'auto';
+  if (mode === 'zh' || mode === 'en') return mode;
+  const browserLang = String(navigator.language || '').toLowerCase();
+  return browserLang.startsWith('zh') ? 'zh' : 'en';
+}
+
+function t(key) {
+  const langPack = CONTENT_I18N[currentLocale] || CONTENT_I18N.zh;
+  return langPack[key] || CONTENT_I18N.zh[key] || key;
+}
+
+function refreshLocalizedTexts() {
+  if (iconContainer) {
+    const buttons = iconContainer.querySelectorAll('.ai-float-btn');
+    if (buttons[0]) buttons[0].title = t('btn_translate');
+    if (buttons[1]) buttons[1].title = t('btn_chat');
+  }
+
+  if (!popup) return;
+  const isCurrentChatMode = Boolean(popup.querySelector('#ai-chat-input'));
+  const headerText = popup.querySelector('#ai-header-text');
+  if (headerText) {
+    headerText.textContent = isCurrentChatMode ? t('title_chat') : t('title_translate');
+  }
+  const stopBtn = popup.querySelector('#ai-popup-stop');
+  if (stopBtn) stopBtn.title = t('tooltip_stop');
+  const pinBtn = popup.querySelector('#ai-popup-pin');
+  if (pinBtn) pinBtn.title = t('tooltip_pin');
+  const closeBtn = popup.querySelector('#ai-popup-close');
+  if (closeBtn) closeBtn.title = t('tooltip_close');
+  const chatInput = popup.querySelector('#ai-chat-input');
+  if (chatInput) chatInput.placeholder = t('chat_input_placeholder');
+  const translateLoader = popup.querySelector('.ai-loading');
+  if (translateLoader) translateLoader.textContent = t('thinking_loading');
+}
+
+function loadLocaleFromStorage(onDone) {
+  const done = typeof onDone === 'function' ? onDone : () => {};
+  try {
+    chrome.storage.sync.get({ [LANGUAGE_MODE_STORAGE_KEY]: 'auto' }, (items) => {
+      const runtimeErr = chrome.runtime && chrome.runtime.lastError;
+      if (runtimeErr) {
+        currentLocale = resolveContentLocale('auto');
+      } else {
+        currentLocale = resolveContentLocale(items[LANGUAGE_MODE_STORAGE_KEY]);
+      }
+      refreshLocalizedTexts();
+      done();
+    });
+  } catch (error) {
+    currentLocale = resolveContentLocale('auto');
+    refreshLocalizedTexts();
+    done();
+  }
+}
+
+function initializeLocaleSync() {
+  loadLocaleFromStorage();
+  try {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== 'sync' || !changes[LANGUAGE_MODE_STORAGE_KEY]) return;
+      currentLocale = resolveContentLocale(changes[LANGUAGE_MODE_STORAGE_KEY].newValue);
+      refreshLocalizedTexts();
+    });
+  } catch (error) {}
 }
 
 function getEffectiveThemeMode(themeMode) {
@@ -116,6 +218,8 @@ function updateHostSize() {
   shadowHost.style.height = `${docHeight}px`;
 }
 
+initializeLocaleSync();
+
 // --- Event Listeners ---
 
 document.addEventListener('mouseup', (e) => {
@@ -145,8 +249,8 @@ async function showButtons(x, y) {
     iconContainer.id = 'ai-btn-container';
     const iconTranslate = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3a14 14 0 0 1 0 18"></path><path d="M12 3a14 14 0 0 0 0 18"></path></svg>`;
     const iconChat = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>`;
-    iconContainer.appendChild(createFloatBtn("翻译/解释", iconTranslate, () => initPopup('translate')));
-    iconContainer.appendChild(createFloatBtn("AI 对话", iconChat, () => initPopup('chat')));
+    iconContainer.appendChild(createFloatBtn(t('btn_translate'), iconTranslate, () => initPopup('translate')));
+    iconContainer.appendChild(createFloatBtn(t('btn_chat'), iconChat, () => initPopup('chat')));
     root.appendChild(iconContainer);
   }
   iconContainer.style.display = 'flex';
@@ -170,6 +274,7 @@ async function initPopup(mode) {
   const rect = iconContainer.getBoundingClientRect();
   hideButtons();
   await getShadowRoot();
+  loadLocaleFromStorage();
   createPopupFrame(rect, mode);
 
   if (mode === 'translate') { isChatMode = false; startTranslation(); }
@@ -212,10 +317,10 @@ function createPopupFrame(targetRect, mode) {
   popup.style.top = `${top}px`;
   popup.style.transform = transform;
 
-  const title = mode === 'translate' ? 'AI 翻译' : 'AI 对话';
+  const title = mode === 'translate' ? t('title_translate') : t('title_chat');
   const footerHtml = mode === 'chat' ? `
     <div id="ai-popup-footer">
-      <input type="text" id="ai-chat-input" placeholder="输入问题..." />
+      <input type="text" id="ai-chat-input" placeholder="${t('chat_input_placeholder')}" />
       <button id="ai-chat-send">➤</button>
     </div>` : '';
 
@@ -226,9 +331,9 @@ function createPopupFrame(targetRect, mode) {
         <span id="ai-header-text">${title}</span>
       </div>
     <div id="ai-header-actions">
-        <span id="ai-popup-stop" title="停止生成">${ICON_STOP}</span>
-        <span id="ai-popup-pin" title="固定/跟随" style="font-weight:bold;">📌</span>
-        <span id="ai-popup-close" title="关闭">✕</span>
+        <span id="ai-popup-stop" title="${t('tooltip_stop')}">${ICON_STOP}</span>
+        <span id="ai-popup-pin" title="${t('tooltip_pin')}" style="font-weight:bold;">📌</span>
+        <span id="ai-popup-close" title="${t('tooltip_close')}">✕</span>
       </div>
     </div>
     <div id="ai-popup-content" class="${mode === 'chat' ? 'chat-mode' : ''}"></div>
@@ -242,6 +347,7 @@ function createPopupFrame(targetRect, mode) {
 
   shadowRoot.appendChild(popup);
   applyPopupTheme(popup);
+  refreshLocalizedTexts();
 
   // ResizeObserver for reverse growth
   if (transform === 'translateY(0)') {
@@ -304,7 +410,7 @@ function renderText(text) {
   });
 
   return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html, {
-    ADD_TAGS: ['math', 'annotation', 'semantics', 'mtext', 'mn', 'mo', 'mi', 'jsp', 'span', 'table', 'tr', 'td', 'th', 'thead', 'tbody'],
+    ADD_TAGS: ['math', 'annotation', 'semantics', 'mtext', 'mn', 'mo', 'mi', 'span', 'table', 'tr', 'td', 'th', 'thead', 'tbody'],
     ADD_ATTR: ['class', 'style', 'aria-hidden', 'viewBox', 'd', 'fill', 'stroke', 'stroke-width']
   }) : html;
 }
@@ -352,7 +458,7 @@ function splitThinkingAndAnswer(rawText) {
 
 function getThinkingPreview(text) {
   const source = String(text || '').replace(/\r/g, '');
-  if (!source.trim()) return '思考中...';
+  if (!source.trim()) return t('thinking_loading');
 
   const lines = source.split('\n');
   const currentLine = lines[lines.length - 1] || '';
@@ -363,7 +469,7 @@ function getThinkingPreview(text) {
     const candidate = (lines[i] || '').replace(/\t/g, '    ');
     if (candidate.trim()) return candidate;
   }
-  return '思考中...';
+  return t('thinking_loading');
 }
 
 function ensureTranslateRenderNodes(container) {
@@ -385,6 +491,52 @@ function renderTranslateOutput(container) {
   currentStreamingMessage = parsed.answer;
 
   const nodes = ensureTranslateRenderNodes(container);
+  let thinkingEl = nodes.thinkingEl;
+  const answerEl = nodes.answerEl;
+  const shouldShowThinking = Boolean(parsed.thinking && parsed.thinking.trim());
+
+  if (shouldShowThinking) {
+    const wasOpen = Boolean(thinkingEl && thinkingEl.open);
+    if (!thinkingEl) {
+      thinkingEl = document.createElement('details');
+      thinkingEl.className = 'ai-thinking';
+      thinkingEl.innerHTML = `
+        <summary><span class="ai-thinking-summary-text"></span></summary>
+        <div class="ai-thinking-body"></div>
+      `;
+      container.insertBefore(thinkingEl, answerEl);
+    }
+    thinkingEl.open = wasOpen;
+    const summaryEl = thinkingEl.querySelector('.ai-thinking-summary-text');
+    const bodyEl = thinkingEl.querySelector('.ai-thinking-body');
+    if (summaryEl) summaryEl.textContent = getThinkingPreview(parsed.thinking);
+    if (bodyEl) bodyEl.textContent = parsed.thinking;
+  } else if (thinkingEl) {
+    thinkingEl.remove();
+  }
+
+  answerEl.innerHTML = parsed.answer ? renderText(parsed.answer) : '';
+}
+
+function ensureChatRenderNodes(container) {
+  if (!container) return { thinkingEl: null, answerEl: null };
+  let answerEl = container.querySelector('.ai-chat-answer');
+  if (!answerEl) {
+    answerEl = document.createElement('div');
+    answerEl.className = 'ai-chat-answer';
+    container.appendChild(answerEl);
+  }
+  const thinkingEl = container.querySelector('.ai-thinking');
+  return { thinkingEl, answerEl };
+}
+
+function renderChatAssistantOutput(container) {
+  if (!container) return;
+  const parsed = splitThinkingAndAnswer(currentStreamingRawMessage);
+  currentThinkingMessage = parsed.thinking;
+  currentStreamingMessage = parsed.answer;
+
+  const nodes = ensureChatRenderNodes(container);
   let thinkingEl = nodes.thinkingEl;
   const answerEl = nodes.answerEl;
   const shouldShowThinking = Boolean(parsed.thinking && parsed.thinking.trim());
@@ -444,9 +596,13 @@ function handleStop() {
 function normalizeRuntimeErrorMessage(error) {
   const raw = error && error.message ? error.message : String(error || '');
   if (raw.includes('Extension context invalidated')) {
-    return '扩展上下文已失效（通常是扩展重载导致），请刷新当前页面后重试。';
+    return t('context_invalidated');
   }
-  return raw || '请求失败。';
+  return raw || t('request_failed');
+}
+
+function formatErrorMessage(message) {
+  return `${t('error_prefix')} ${message}`;
 }
 
 function showPopupError(message) {
@@ -456,7 +612,7 @@ function showPopupError(message) {
   if (!contentEl) return;
   const err = document.createElement('div');
   err.className = 'ai-error';
-  err.textContent = `Error: ${message}`;
+  err.textContent = formatErrorMessage(message);
   contentEl.textContent = '';
   contentEl.appendChild(err);
 }
@@ -479,7 +635,7 @@ function disconnectCurrentPort(sendCancel) {
   disconnectPort(targetPort, sendCancel);
 }
 
-function connectAndSend(payload, onChunk, onDone, onError) {
+function connectAndSend(payload, onChunk, onDone, onError, onThinking) {
   disconnectCurrentPort(false);
   let currentPort = null;
   try {
@@ -522,17 +678,21 @@ function connectAndSend(payload, onChunk, onDone, onError) {
 
   currentPort.onMessage.addListener((msg) => {
     if (!popup || port !== currentPort) return;
-    if (msg.type === 'thinking' && !isChatMode) {
-      const el = popup.querySelector('#ai-popup-content');
-      const shouldScroll = isNearBottom(el);
-      if (el.querySelector('.ai-loading')) el.innerHTML = '';
-      currentThinkingMessage += (typeof msg.content === 'string' ? msg.content : '');
-      const answerText = currentStreamingMessage || '';
-      currentStreamingRawMessage = currentThinkingMessage
-        ? `<think>${currentThinkingMessage}</think>${answerText}`
-        : answerText;
-      renderTranslateOutput(el);
-      if (shouldScroll) scrollToBottom(el);
+    if (msg.type === 'thinking') {
+      if (isChatMode) {
+        if (onThinking) onThinking(msg.content);
+      } else {
+        const el = popup.querySelector('#ai-popup-content');
+        const shouldScroll = isNearBottom(el);
+        if (el.querySelector('.ai-loading')) el.innerHTML = '';
+        currentThinkingMessage += (typeof msg.content === 'string' ? msg.content : '');
+        const answerText = currentStreamingMessage || '';
+        currentStreamingRawMessage = currentThinkingMessage
+          ? `<think>${currentThinkingMessage}</think>${answerText}`
+          : answerText;
+        renderTranslateOutput(el);
+        if (shouldScroll) scrollToBottom(el);
+      }
     } else if (msg.type === 'chunk') {
       if (isChatMode && onChunk) onChunk(msg.content);
       else if (!isChatMode) {
@@ -551,7 +711,7 @@ function connectAndSend(payload, onChunk, onDone, onError) {
         const contentEl = popup.querySelector('#ai-popup-content');
         const err = document.createElement('div');
         err.className = 'ai-error';
-        err.textContent = `Error: ${msg.content}`;
+        err.textContent = formatErrorMessage(msg.content);
         contentEl.textContent = '';
         contentEl.appendChild(err);
       }
@@ -572,7 +732,7 @@ function startTranslation() {
   currentStreamingMessage = '';
   currentStreamingRawMessage = '';
   currentThinkingMessage = '';
-  popup.querySelector('#ai-popup-content').innerHTML = '<div class="ai-loading">思考中...</div>';
+  popup.querySelector('#ai-popup-content').innerHTML = `<div class="ai-loading">${t('thinking_loading')}</div>`;
   updateTitleStatus('loading');
   connectAndSend({ action: 'translate', text: currentSelection });
 }
@@ -587,7 +747,7 @@ function finalizeTranslateLoadingState() {
   if (!String(currentStreamingMessage || '').trim()) {
     const emptyMsg = document.createElement('div');
     emptyMsg.className = 'ai-error';
-    emptyMsg.textContent = '模型未返回内容。';
+    emptyMsg.textContent = t('model_no_content');
     contentEl.appendChild(emptyMsg);
   }
 }
@@ -608,8 +768,8 @@ function sendChatRequest() {
     (chunk) => {
       const shouldScroll = isNearBottom(container);
       loadingSpan.remove();
-      currentStreamingMessage += chunk;
-      responseDiv.innerHTML = renderText(currentStreamingMessage);
+      currentStreamingRawMessage += chunk;
+      renderChatAssistantOutput(responseDiv);
       if (shouldScroll) scrollToBottom(container);
     },
     () => {
@@ -618,7 +778,7 @@ function sendChatRequest() {
       if (!currentStreamingMessage) {
         const emptyMsg = document.createElement('div');
         emptyMsg.className = 'ai-error';
-        emptyMsg.textContent = '模型未返回内容。';
+        emptyMsg.textContent = t('model_no_content');
         responseDiv.appendChild(emptyMsg);
       }
       if (chatHistory.length > 0) chatHistory[chatHistory.length-1].content = currentStreamingMessage;
@@ -627,9 +787,20 @@ function sendChatRequest() {
       updateTitleStatus('error');
       chatHistory.pop(); loadingSpan.remove();
       const errDiv = document.createElement('div');
-      errDiv.className = 'ai-error'; errDiv.textContent = `Error: ${errMsg}`;
+      errDiv.className = 'ai-error'; errDiv.textContent = formatErrorMessage(errMsg);
       responseDiv.appendChild(errDiv);
       scrollToBottom(container);
+    },
+    (thinkingChunk) => {
+      const shouldScroll = isNearBottom(container);
+      loadingSpan.remove();
+      currentThinkingMessage += (typeof thinkingChunk === 'string' ? thinkingChunk : '');
+      const answerText = currentStreamingMessage || '';
+      currentStreamingRawMessage = currentThinkingMessage
+        ? `<think>${currentThinkingMessage}</think>${answerText}`
+        : answerText;
+      renderChatAssistantOutput(responseDiv);
+      if (shouldScroll) scrollToBottom(container);
     }
   );
 }
