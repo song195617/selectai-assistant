@@ -29,13 +29,15 @@ async function getShadowRoot() {
   shadowRoot = shadowHost.attachShadow({ mode: 'open' });
 
   injectStyle(CRITICAL_BTN_CSS);
+
+  // Attach first, then load stylesheets to avoid waiting on detached link elements.
+  document.documentElement.appendChild(shadowHost);
+  updateHostSize();
+
   const katexCssUrl = safeRuntimeGetURL(KATEX_CSS_PATH);
   if (katexCssUrl) await injectStylesheetLink(katexCssUrl);
   const localCssUrl = safeRuntimeGetURL('content.css');
   if (localCssUrl) await injectStylesheetLink(localCssUrl);
-
-  document.documentElement.appendChild(shadowHost);
-  updateHostSize();
   return shadowRoot;
 }
 
