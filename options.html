@@ -143,6 +143,32 @@
       margin-bottom: 14px;
       background: #fcfdff;
     }
+    .model-list-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-top: 8px;
+      margin-bottom: 6px;
+    }
+    .model-list-head label {
+      margin: 0;
+    }
+    .btn-test-all {
+      border: 1px solid #dbe4f2;
+      background: #f4f8ff;
+      color: #1d4ed8;
+      padding: 6px 10px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn-test-all:hover { background: #eaf2ff; }
+    .btn-test-all:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
     .model-item {
       padding: 12px 12px;
       border-bottom: 1px solid #eef1f6;
@@ -155,6 +181,11 @@
     .model-info { display: flex; flex-direction: column; gap: 4px; }
     .model-name { font-weight: 800; color: #0f172a; }
     .model-sub { font-size: 11px; color: var(--muted); }
+    .model-test-status { font-size: 11px; font-weight: 700; }
+    .model-test-idle { color: #64748b; }
+    .model-test-testing { color: #2563eb; }
+    .model-test-success { color: #0f766e; }
+    .model-test-error { color: #b91c1c; }
 
     .item-actions { display: flex; gap: 8px; }
     .btn-icon {
@@ -247,7 +278,10 @@
         <label>当前使用的模型</label>
         <select id="activeModelSelect"></select>
 
-        <label style="margin-top: 8px;">已保存的模型</label>
+        <div class="model-list-head">
+          <label>已保存的模型</label>
+          <button id="testAllModelsBtn" type="button" class="btn-test-all">连通性测试</button>
+        </div>
         <div class="model-list" id="modelList"></div>
 
         <div class="add-form" id="modelForm">

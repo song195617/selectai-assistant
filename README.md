@@ -36,7 +36,7 @@
 ## 支持的模型类型
 
 - OpenAI 兼容接口（如 DeepSeek、豆包等）
-- Google Gemini（如 gemini-1.5-flash）
+- Google Gemini（如 gemini-flash-latest）
 
 ## 项目结构
 

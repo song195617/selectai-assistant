@@ -29,11 +29,21 @@ async function getShadowRoot() {
 
   injectStyle(CRITICAL_BTN_CSS);
   await injectExternalStyle(KATEX_CSS_URL);
-  await injectExternalStyle(chrome.runtime.getURL('content.css'));
+  const localCssUrl = safeRuntimeGetURL('content.css');
+  if (localCssUrl) await injectExternalStyle(localCssUrl);
 
   document.documentElement.appendChild(shadowHost);
   updateHostSize();
   return shadowRoot;
+}
+
+function safeRuntimeGetURL(path) {
+  try {
+    return chrome.runtime.getURL(path);
+  } catch (error) {
+    console.warn('Extension context invalidated while resolving URL:', path);
+    return '';
+  }
 }
 
 function injectStyle(cssContent) {
@@ -275,6 +285,26 @@ function handleStop() {
   }
 }
 
+function normalizeRuntimeErrorMessage(error) {
+  const raw = error && error.message ? error.message : String(error || '');
+  if (raw.includes('Extension context invalidated')) {
+    return '扩展上下文已失效（通常是扩展重载导致），请刷新当前页面后重试。';
+  }
+  return raw || '请求失败。';
+}
+
+function showPopupError(message) {
+  updateTitleStatus('error');
+  if (!popup) return;
+  const contentEl = popup.querySelector('#ai-popup-content');
+  if (!contentEl) return;
+  const err = document.createElement('div');
+  err.className = 'ai-error';
+  err.textContent = `Error: ${message}`;
+  contentEl.textContent = '';
+  contentEl.appendChild(err);
+}
+
 function disconnectPort(targetPort, sendCancel) {
   if (!targetPort) return;
   if (sendCancel) {
@@ -295,9 +325,44 @@ function disconnectCurrentPort(sendCancel) {
 
 function connectAndSend(payload, onChunk, onDone, onError) {
   disconnectCurrentPort(false);
-  const currentPort = chrome.runtime.connect({ name: 'ai-stream' });
+  let currentPort = null;
+  try {
+    currentPort = chrome.runtime.connect({ name: 'ai-stream' });
+  } catch (error) {
+    const message = normalizeRuntimeErrorMessage(error);
+    if (onError) onError(message);
+    else showPopupError(message);
+    return;
+  }
+
   port = currentPort;
-  currentPort.postMessage(payload);
+  let isFinished = false;
+  try {
+    currentPort.postMessage(payload);
+  } catch (error) {
+    const message = normalizeRuntimeErrorMessage(error);
+    if (onError) onError(message);
+    else showPopupError(message);
+    disconnectCurrentPort(false);
+    return;
+  }
+
+  currentPort.onDisconnect.addListener(() => {
+    if (port !== currentPort) return;
+    if (isFinished) return;
+    const runtimeErr = chrome.runtime && chrome.runtime.lastError
+      ? chrome.runtime.lastError.message
+      : '';
+    if (runtimeErr) {
+      const message = normalizeRuntimeErrorMessage(new Error(runtimeErr));
+      if (onError) onError(message);
+      else showPopupError(message);
+    } else if (!isChatMode) {
+      updateTitleStatus('done');
+      finalizeTranslateLoadingState();
+    }
+    disconnectCurrentPort(false);
+  });
 
   currentPort.onMessage.addListener((msg) => {
     if (!popup || port !== currentPort) return;
@@ -312,6 +377,7 @@ function connectAndSend(payload, onChunk, onDone, onError) {
         if (shouldScroll) scrollToBottom(el);
       }
     } else if (msg.type === 'error') {
+      isFinished = true;
       updateTitleStatus('error');
       if (onError) onError(msg.content);
       else {
@@ -324,7 +390,11 @@ function connectAndSend(payload, onChunk, onDone, onError) {
       }
       disconnectCurrentPort(false);
     } else if (msg.type === 'done') {
-      if (!isChatMode) updateTitleStatus('done');
+      isFinished = true;
+      if (!isChatMode) {
+        updateTitleStatus('done');
+        finalizeTranslateLoadingState();
+      }
       if (onDone) onDone();
       disconnectCurrentPort(false);
     }
@@ -335,6 +405,21 @@ function startTranslation() {
   popup.querySelector('#ai-popup-content').innerHTML = '<div class="ai-loading">思考中...</div>';
   updateTitleStatus('loading');
   connectAndSend({ action: 'translate', text: currentSelection });
+}
+
+function finalizeTranslateLoadingState() {
+  if (!popup) return;
+  const contentEl = popup.querySelector('#ai-popup-content');
+  if (!contentEl) return;
+  const loader = contentEl.querySelector('.ai-loading');
+  if (!loader) return;
+  loader.remove();
+  if (!contentEl.textContent.trim()) {
+    const emptyMsg = document.createElement('div');
+    emptyMsg.className = 'ai-error';
+    emptyMsg.textContent = '模型未返回内容。';
+    contentEl.appendChild(emptyMsg);
+  }
 }
 
 function sendChatRequest() {
@@ -357,6 +442,13 @@ function sendChatRequest() {
     },
     () => {
       updateTitleStatus('done');
+      loadingSpan.remove();
+      if (!currentStreamingMessage) {
+        const emptyMsg = document.createElement('div');
+        emptyMsg.className = 'ai-error';
+        emptyMsg.textContent = '模型未返回内容。';
+        responseDiv.appendChild(emptyMsg);
+      }
       if (chatHistory.length > 0) chatHistory[chatHistory.length-1].content = currentStreamingMessage;
     },
     (errMsg) => {

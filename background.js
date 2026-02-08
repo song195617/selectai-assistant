@@ -1,4 +1,18 @@
 const activeRequests = new WeakMap();
+const PROVIDER_TEST_TIMEOUT_MS = 15000;
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.action !== 'test-provider-connectivity') return;
+  (async () => {
+    try {
+      await testProviderConnectivity(msg.provider);
+      sendResponse({ ok: true });
+    } catch (error) {
+      sendResponse({ ok: false, error: error?.message || '连通性测试失败。' });
+    }
+  })();
+  return true;
+});
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "ai-stream") return;
@@ -111,6 +125,144 @@ function buildGoogleGenAIUrl(config) {
   return `${base}/models/${model}:streamGenerateContent`;
 }
 
+function buildGoogleGenAITestUrl(config) {
+  const streamUrl = buildGoogleGenAIUrl(config);
+  if (!streamUrl) return '';
+  if (streamUrl.includes(':streamGenerateContent')) {
+    return streamUrl.replace(':streamGenerateContent', ':generateContent');
+  }
+  return streamUrl;
+}
+
+function normalizeProviderInput(provider) {
+  if (!provider || typeof provider !== 'object' || Array.isArray(provider)) {
+    throw new Error('模型配置格式错误。');
+  }
+  const type = String(provider.type || '').trim();
+  const url = String(provider.url || '').trim();
+  const model = String(provider.model || '').trim();
+  const key = String(provider.key || '').trim();
+  if (!type || !url || !key) {
+    throw new Error('请填写模型类型、API 地址和 Key。');
+  }
+  return { type, url, model, key };
+}
+
+function parseOpenAITextContent(content) {
+  if (typeof content === 'string') return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => (item && typeof item.text === 'string' ? item.text : ''))
+      .join('')
+      .trim();
+  }
+  return '';
+}
+
+function extractOpenAIResponseText(json) {
+  const choice = json?.choices?.[0];
+  if (!choice) return '';
+  if (choice.message?.content !== undefined) {
+    return parseOpenAITextContent(choice.message.content);
+  }
+  if (choice.delta?.content !== undefined) {
+    return parseOpenAITextContent(choice.delta.content);
+  }
+  return '';
+}
+
+function extractGeminiResponseText(json) {
+  const parts = json?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts)) return '';
+  return parts
+    .map((part) => (part && typeof part.text === 'string' ? part.text : ''))
+    .join('');
+}
+
+async function fetchJsonWithTimeout(url, options) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), PROVIDER_TEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${text}`);
+    }
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      throw new Error('接口返回了非 JSON 响应。');
+    }
+  } catch (error) {
+    if (error && error.name === 'AbortError') {
+      throw new Error('连通性测试超时，请检查网络或接口地址。');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function testOpenAIProvider(provider) {
+  const payload = {
+    model: provider.model,
+    messages: [{ role: 'user', content: 'Reply with "ok" only.' }],
+    stream: false,
+    temperature: 0,
+    max_tokens: 16
+  };
+
+  const json = await fetchJsonWithTimeout(provider.url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${provider.key}`
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const text = extractOpenAIResponseText(json);
+  if (!text) throw new Error('模型接口可达，但未返回可用文本。');
+}
+
+async function testGoogleProvider(provider) {
+  const apiUrl = buildGoogleGenAITestUrl(provider);
+  if (!apiUrl) throw new Error('Google API 地址未配置。');
+  const urlWithKey = `${apiUrl}?key=${provider.key}`;
+  const payload = {
+    contents: [{
+      role: 'user',
+      parts: [{ text: 'Reply with "ok" only.' }]
+    }],
+    generationConfig: {
+      temperature: 0,
+      maxOutputTokens: 16
+    }
+  };
+
+  const json = await fetchJsonWithTimeout(urlWithKey, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  const text = extractGeminiResponseText(json);
+  if (!text.trim()) throw new Error('Gemini 接口可达，但未返回可用文本。');
+}
+
+async function testProviderConnectivity(providerInput) {
+  const provider = normalizeProviderInput(providerInput);
+  if (provider.type === 'openai') {
+    await testOpenAIProvider(provider);
+    return;
+  }
+  if (provider.type === 'google') {
+    await testGoogleProvider(provider);
+    return;
+  }
+  throw new Error(`未知模型类型: ${provider.type}`);
+}
+
 async function handleGoogleGenAI(config, messages, settings, port) {
   const apiUrl = buildGoogleGenAIUrl(config);
   if (!apiUrl) throw new Error("Google API 地址未配置。");
@@ -141,9 +293,7 @@ async function handleGoogleGenAI(config, messages, settings, port) {
     throw new Error(`Google API Error ${response.status}: ${errText}`);
   }
 
-  await readStreamWithBracketCounting(response, port, (json) => {
-    return json.candidates?.[0]?.content?.parts?.[0]?.text;
-  });
+  await readStreamWithBracketCounting(response, port, extractGeminiResponseText);
 }
 
 async function handleOpenAICompatible(config, messages, settings, port) {

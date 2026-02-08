@@ -3,8 +3,8 @@ const DEFAULT_PROVIDERS = [
     id: 'default-gemini',
     label: 'Google Gemini Flash',
     type: 'google',
-    url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent',
-    model: 'gemini-1.5-flash',
+    url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent',
+    model: 'gemini-flash-latest',
     key: ''
   },
   {
@@ -29,12 +29,16 @@ const DEFAULT_SETTINGS = {
 
 let currentSettings = { ...DEFAULT_SETTINGS };
 let editingId = null;
+let isTestingProvider = false;
+let isBatchTesting = false;
+const connectivityResults = {};
 
 document.addEventListener('DOMContentLoaded', () => {
   loadSettings();
   document.getElementById('save').addEventListener('click', saveSettings);
   document.getElementById('saveModelBtn').addEventListener('click', handleModelFormSubmit);
   document.getElementById('cancelEditBtn').addEventListener('click', cancelEdit);
+  document.getElementById('testAllModelsBtn').addEventListener('click', handleTestAllModelsConnectivity);
   document.getElementById('exportBtn').addEventListener('click', exportConfig);
   document.getElementById('importBtn').addEventListener('click', () => document.getElementById('fileInput').click());
   document.getElementById('fileInput').addEventListener('change', importConfig);
@@ -66,7 +70,7 @@ function renderUI() {
   selectEl.textContent = '';
 
   currentSettings.providers.forEach((p, index) => {
-    const providerId = normalizeString(p.id) || `provider-${index}`;
+    const providerId = getProviderId(p, index);
     const providerLabel = typeof p.label === 'string' ? p.label : '';
     const providerType = typeof p.type === 'string' ? p.type.toUpperCase() : 'UNKNOWN';
     const providerModel = typeof p.model === 'string' ? p.model : '';
@@ -85,8 +89,14 @@ function renderUI() {
     modelSub.className = 'model-sub';
     modelSub.textContent = `${providerType} - ${providerModel}`;
 
+    const testState = getConnectivityResultFor(providerId);
+    const statusSpan = document.createElement('span');
+    statusSpan.className = `model-test-status ${getConnectivityStatusClass(testState.state)}`;
+    statusSpan.textContent = getConnectivityStatusText(testState);
+
     modelInfo.appendChild(modelName);
     modelInfo.appendChild(modelSub);
+    modelInfo.appendChild(statusSpan);
 
     const itemActions = document.createElement('div');
     itemActions.className = 'item-actions';
@@ -124,6 +134,8 @@ function renderUI() {
     if (providerId === currentSettings.activeProviderId) option.selected = true;
     selectEl.appendChild(option);
   });
+
+  updateBatchTestButtonState();
 }
 
 function startEdit(id) {
@@ -155,8 +167,10 @@ function cancelEdit(e) {
   document.getElementById('modelForm').classList.remove('editing');
 }
 
-function handleModelFormSubmit(e) {
+async function handleModelFormSubmit(e) {
   if(e) e.preventDefault();
+  if (isTestingProvider || isBatchTesting) return;
+
   const label = document.getElementById('newLabel').value.trim();
   const type = document.getElementById('newType').value;
   const url = document.getElementById('newUrl').value.trim();
@@ -168,19 +182,41 @@ function handleModelFormSubmit(e) {
     return;
   }
 
+  const providerCandidate = {
+    id: editingId || ('custom-' + Date.now()),
+    label,
+    type,
+    url,
+    model,
+    key
+  };
+
+  try {
+    setModelTestingState(true);
+    showStatus('正在测试模型连通性...', '#0f6fff');
+    await testProviderConnectivity(providerCandidate);
+  } catch (error) {
+    showStatus('\u274C 连通性测试失败: ' + error.message, '#dc3545');
+    return;
+  } finally {
+    setModelTestingState(false);
+  }
+
   if (editingId) {
     const index = currentSettings.providers.findIndex(p => p.id === editingId);
     if (index !== -1) {
-      currentSettings.providers[index] = { id: editingId, label, type, url, model, key };
-      showStatus('\u2705 模型更新成功！', '#007bff');
+      currentSettings.providers[index] = providerCandidate;
+      setConnectivityResult(providerCandidate.id, 'success', '最近测试：通过');
+      showStatus('\u2705 连通性通过，模型更新成功！', '#007bff');
     }
     cancelEdit();
   } else {
-    const newProvider = { id: 'custom-' + Date.now(), label, type, url, model, key };
+    const newProvider = providerCandidate;
     currentSettings.providers.push(newProvider);
     currentSettings.activeProviderId = newProvider.id;
+    setConnectivityResult(newProvider.id, 'success', '最近测试：通过');
     clearForm();
-    showStatus('\u2705 模型已添加到列表！', '#28a745');
+    showStatus('\u2705 连通性通过，模型已添加到列表！', '#28a745');
   }
   renderUI();
   chrome.storage.sync.set(currentSettings);
@@ -193,6 +229,7 @@ function deleteProvider(id) {
   }
   if (editingId === id) cancelEdit();
   currentSettings.providers = currentSettings.providers.filter(p => p.id !== id);
+  delete connectivityResults[id];
   if (currentSettings.activeProviderId === id) {
     currentSettings.activeProviderId = currentSettings.providers[0].id;
   }
@@ -332,4 +369,118 @@ function showStatus(msg, color) {
   el.textContent = msg;
   el.style.color = color;
   setTimeout(() => el.textContent = '', 3000);
+}
+
+function setModelTestingState(testing) {
+  isTestingProvider = testing;
+  const saveBtn = document.getElementById('saveModelBtn');
+  const cancelBtn = document.getElementById('cancelEditBtn');
+  saveBtn.disabled = testing;
+  cancelBtn.disabled = testing;
+  saveBtn.textContent = testing ? '测试中...' : (editingId ? '更新模型' : '添加到列表');
+  updateBatchTestButtonState();
+}
+
+function setBatchTestingState(testing) {
+  isBatchTesting = testing;
+  updateBatchTestButtonState();
+}
+
+async function handleTestAllModelsConnectivity(e) {
+  if (e) e.preventDefault();
+  if (isBatchTesting || isTestingProvider) return;
+  const providers = Array.isArray(currentSettings.providers) ? currentSettings.providers : [];
+  if (providers.length === 0) {
+    showStatus('\u274C 没有可测试的模型。', '#dc3545');
+    return;
+  }
+
+  setBatchTestingState(true);
+  providers.forEach((provider, index) => {
+    const providerId = getProviderId(provider, index);
+    setConnectivityResult(providerId, 'testing', '测试中...');
+  });
+  renderUI();
+  showStatus(`正在并行测试 ${providers.length} 个模型（30 秒超时）...`, '#0f6fff');
+
+  const checks = providers.map((provider) => testProviderConnectivity({
+    id: provider.id,
+    label: provider.label,
+    type: provider.type,
+    url: provider.url,
+    model: provider.model,
+    key: provider.key
+  }));
+  const results = await Promise.allSettled(checks);
+
+  let passCount = 0;
+  let failCount = 0;
+  results.forEach((result, index) => {
+    const providerId = getProviderId(providers[index], index);
+    if (result.status === 'fulfilled') {
+      passCount++;
+      setConnectivityResult(providerId, 'success', '测试通过');
+      return;
+    }
+    failCount++;
+    const msg = result.reason && result.reason.message ? result.reason.message : '连通性测试失败。';
+    setConnectivityResult(providerId, 'error', `失败：${msg}`);
+  });
+
+  setBatchTestingState(false);
+  renderUI();
+
+  if (failCount === 0) {
+    showStatus(`\u2705 全部通过：${passCount}/${providers.length}`, '#28a745');
+  } else {
+    showStatus(`\u26A0 通过 ${passCount}，失败 ${failCount}（共 ${providers.length}）`, '#dc3545');
+  }
+}
+
+function testProviderConnectivity(provider) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ action: 'test-provider-connectivity', provider }, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message || '无法连接后台服务。'));
+        return;
+      }
+      if (!response || response.ok !== true) {
+        reject(new Error(response?.error || '模型连通性测试失败。'));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function updateBatchTestButtonState() {
+  const btn = document.getElementById('testAllModelsBtn');
+  if (!btn) return;
+  const hasModels = Array.isArray(currentSettings.providers) && currentSettings.providers.length > 0;
+  btn.disabled = !hasModels || isBatchTesting || isTestingProvider;
+  btn.textContent = isBatchTesting ? '测试中...' : '连通性测试';
+}
+
+function setConnectivityResult(providerId, state, message) {
+  if (!providerId) return;
+  connectivityResults[providerId] = { state, message };
+}
+
+function getConnectivityResultFor(providerId) {
+  return connectivityResults[providerId] || { state: 'idle', message: '未测试' };
+}
+
+function getConnectivityStatusClass(state) {
+  if (state === 'testing') return 'model-test-testing';
+  if (state === 'success') return 'model-test-success';
+  if (state === 'error') return 'model-test-error';
+  return 'model-test-idle';
+}
+
+function getConnectivityStatusText(result) {
+  return `连通性：${result.message}`;
+}
+
+function getProviderId(provider, index) {
+  return normalizeString(provider && provider.id) || `provider-${index}`;
 }
