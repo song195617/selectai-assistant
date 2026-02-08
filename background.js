@@ -1,5 +1,6 @@
 const activeRequests = new WeakMap();
 const PROVIDER_TEST_TIMEOUT_MS = 15000;
+const PROVIDER_KEYS_STORAGE_KEY = 'providerKeys';
 const DEFAULT_TRANSLATE_PROMPT = '你是一位精通多国语言的资深翻译专家、语言学家和跨文化交流顾问。你不仅擅长将文本从源语言精准翻译成中文，也擅长将中文表达的文本精准地道地翻译成英文，还能敏锐地识别文本类型（单词、句子、段落或长文），并根据不同类型提供深度解析。';
 const DEFAULT_CHAT_PROMPT = '你是一位博古通今、风趣幽默的“老教授”，同时也是用户多年的“老朋友”。你拥有海量的知识储备（涵盖科技、人文、历史、语言学等），但你从不掉书袋。你的特长是用最通俗易懂、深入浅出的语言，把复杂的事情讲清楚。你就像在咖啡馆里和老友聊天一样，语气亲切、平和，偶尔带点智慧的幽默。';
 
@@ -51,6 +52,22 @@ function tryPostMessage(port, payload) {
   }
 }
 
+async function getProviderKeysFromLocal() {
+  try {
+    const items = await chrome.storage.local.get({ [PROVIDER_KEYS_STORAGE_KEY]: {} });
+    const raw = items && items[PROVIDER_KEYS_STORAGE_KEY];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    const keys = {};
+    Object.keys(raw).forEach((providerId) => {
+      const key = typeof raw[providerId] === 'string' ? raw[providerId].trim() : '';
+      if (key) keys[providerId] = key;
+    });
+    return keys;
+  } catch (error) {
+    return {};
+  }
+}
+
 function composePromptWithSelectedText(prompt, selectedText, fallbackPrompt = '') {
   const rawPrompt = typeof prompt === 'string' ? prompt.trim() : '';
   const defaultPrompt = typeof fallbackPrompt === 'string' ? fallbackPrompt.trim() : '';
@@ -94,9 +111,18 @@ async function processAIRequest(msg, port) {
       translatePrompt: '',
       chatPrompt: ''
     });
+    const providerKeys = await getProviderKeysFromLocal();
 
-    const activeProvider = settings.providers.find(p => p.id === settings.activeProviderId);
+    const activeProviderRaw = settings.providers.find(p => p.id === settings.activeProviderId);
+    const activeProviderId = typeof activeProviderRaw?.id === 'string' ? activeProviderRaw.id.trim() : '';
+    const localKey = activeProviderId ? providerKeys[activeProviderId] : '';
+    const activeProvider = activeProviderRaw
+      ? { ...activeProviderRaw, key: localKey || (typeof activeProviderRaw.key === 'string' ? activeProviderRaw.key.trim() : '') }
+      : null;
     if (!activeProvider || !activeProvider.key) throw new Error("未选择模型或缺少 API Key。");
+    if (msg.action !== 'translate' && msg.action !== 'chat') {
+      throw new Error(`不支持的请求类型: ${msg.action}`);
+    }
 
     let messages = [];
     let activeTemperature = settings.transTemperature;
@@ -181,35 +207,82 @@ function normalizeProviderInput(provider) {
   return { type, url, model, key };
 }
 
-function parseOpenAITextContent(content) {
-  if (typeof content === 'string') return content.trim();
+function parseOpenAITextContent(content, trim = true, target = 'answer') {
+  if (typeof content === 'string') {
+    return trim ? content.trim() : content;
+  }
   if (Array.isArray(content)) {
-    return content
-      .map((item) => (item && typeof item.text === 'string' ? item.text : ''))
-      .join('')
-      .trim();
+    const text = content
+      .map((item) => {
+        if (typeof item === 'string') {
+          return target === 'answer' ? item : '';
+        }
+        if (!item || typeof item.text !== 'string') return '';
+        const itemType = typeof item.type === 'string' ? item.type.toLowerCase() : '';
+        const isThinking = itemType.includes('reason') || item.thought === true || item.reasoning === true;
+        if (target === 'thinking') return isThinking ? item.text : '';
+        return isThinking ? '' : item.text;
+      })
+      .join('');
+    return trim ? text.trim() : text;
   }
   return '';
 }
 
-function extractOpenAIResponseText(json) {
+function extractOpenAIResponseText(json, trim = true) {
   const choice = json?.choices?.[0];
   if (!choice) return '';
   if (choice.message?.content !== undefined) {
-    return parseOpenAITextContent(choice.message.content);
+    return parseOpenAITextContent(choice.message.content, trim, 'answer');
   }
   if (choice.delta?.content !== undefined) {
-    return parseOpenAITextContent(choice.delta.content);
+    return parseOpenAITextContent(choice.delta.content, trim, 'answer');
   }
   return '';
 }
 
-function extractGeminiResponseText(json) {
+function extractOpenAIReasoningText(json, trim = true) {
+  const choice = json?.choices?.[0];
+  if (!choice) return '';
+  if (choice.message?.reasoning_content !== undefined) {
+    return parseOpenAITextContent(choice.message.reasoning_content, trim, 'thinking');
+  }
+  if (choice.delta?.reasoning_content !== undefined) {
+    return parseOpenAITextContent(choice.delta.reasoning_content, trim, 'thinking');
+  }
+  if (choice.message?.reasoning !== undefined) {
+    return parseOpenAITextContent(choice.message.reasoning, trim, 'thinking');
+  }
+  if (choice.delta?.reasoning !== undefined) {
+    return parseOpenAITextContent(choice.delta.reasoning, trim, 'thinking');
+  }
+  if (Array.isArray(choice.message?.content)) {
+    return parseOpenAITextContent(choice.message.content, trim, 'thinking');
+  }
+  if (Array.isArray(choice.delta?.content)) {
+    return parseOpenAITextContent(choice.delta.content, trim, 'thinking');
+  }
+  return '';
+}
+
+function extractGeminiResponseParts(json) {
   const parts = json?.candidates?.[0]?.content?.parts;
-  if (!Array.isArray(parts)) return '';
-  return parts
-    .map((part) => (part && typeof part.text === 'string' ? part.text : ''))
-    .join('');
+  if (!Array.isArray(parts)) return { answer: '', thinking: '' };
+  let answer = '';
+  let thinking = '';
+  for (const part of parts) {
+    if (!part || typeof part.text !== 'string') continue;
+    if (part.thought === true) {
+      thinking += part.text;
+    } else {
+      answer += part.text;
+    }
+  }
+  return { answer, thinking };
+}
+
+function extractGeminiResponseText(json) {
+  return extractGeminiResponseParts(json).answer;
 }
 
 async function fetchJsonWithTimeout(url, options) {
@@ -279,8 +352,10 @@ async function testGoogleProvider(provider) {
     body: JSON.stringify(payload)
   });
 
-  const text = extractGeminiResponseText(json);
-  if (!text.trim()) throw new Error('Gemini 接口可达，但未返回可用文本。');
+  const parts = extractGeminiResponseParts(json);
+  if (!parts.answer.trim() && !parts.thinking.trim()) {
+    throw new Error('Gemini 接口可达，但未返回可用文本。');
+  }
 }
 
 async function testProviderConnectivity(providerInput) {
@@ -342,7 +417,7 @@ async function handleGoogleGenAI(config, messages, settings, port) {
     throw new Error(`Google API Error ${response.status}: ${errText}`);
   }
 
-  await readStreamWithBracketCounting(response, port, extractGeminiResponseText);
+  await readStreamWithBracketCounting(response, port, extractGeminiResponseParts);
 }
 
 async function handleOpenAICompatible(config, messages, settings, port) {
@@ -396,8 +471,15 @@ async function readStreamWithBracketCounting(response, port, extractor) {
               const jsonStr = buffer.substring(jsonStartIndex, i + 1);
               try {
                 const json = JSON.parse(jsonStr);
-                const chunk = extractor(json);
-                if (chunk) tryPostMessage(port, { type: 'chunk', content: chunk });
+                const extracted = extractor(json);
+                if (typeof extracted === 'string') {
+                  if (extracted) tryPostMessage(port, { type: 'chunk', content: extracted });
+                } else if (extracted && typeof extracted === 'object') {
+                  const thinkingChunk = typeof extracted.thinking === 'string' ? extracted.thinking : '';
+                  const answerChunk = typeof extracted.answer === 'string' ? extracted.answer : '';
+                  if (thinkingChunk) tryPostMessage(port, { type: 'thinking', content: thinkingChunk });
+                  if (answerChunk) tryPostMessage(port, { type: 'chunk', content: answerChunk });
+                }
               } catch (e) {}
               buffer = buffer.substring(i + 1); i = -1; jsonStartIndex = -1;
             }
@@ -415,28 +497,48 @@ async function readStreamWithBracketCounting(response, port, extractor) {
 async function readStreamSSE(response, port) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = '';
+  let lineBuffer = '';
+  let eventDataLines = [];
+
+  const flushEventData = () => {
+    if (eventDataLines.length === 0) return;
+    const dataStr = eventDataLines.join('\n').trim();
+    eventDataLines = [];
+    if (!dataStr || dataStr === '[DONE]') return;
+    try {
+      const json = JSON.parse(dataStr);
+      const thinking = extractOpenAIReasoningText(json, false);
+      if (thinking) tryPostMessage(port, { type: 'thinking', content: thinking });
+      const chunk = extractOpenAIResponseText(json, false);
+      if (chunk) tryPostMessage(port, { type: 'chunk', content: chunk });
+    } catch (error) {
+      console.warn('Failed to parse SSE data chunk:', error);
+    }
+  };
+
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (let line of lines) {
-        line = line.trim();
-        if (!line) continue;
-        if (line.startsWith('data: ')) {
-          const dataStr = line.slice(6);
-          if (dataStr === '[DONE]') continue;
-          try {
-            const json = JSON.parse(dataStr);
-            const chunk = json.choices?.[0]?.delta?.content;
-            if (chunk) tryPostMessage(port, { type: 'chunk', content: chunk });
-          } catch (e) {}
+      lineBuffer += decoder.decode(value, { stream: true });
+      const lines = lineBuffer.split(/\r?\n/);
+      lineBuffer = lines.pop() || '';
+      for (const rawLine of lines) {
+        const line = rawLine.trimEnd();
+        if (!line) {
+          flushEventData();
+          continue;
+        }
+        if (line.startsWith('data:')) {
+          eventDataLines.push(line.slice(5).trimStart());
         }
       }
     }
+    const tailLine = lineBuffer.trim();
+    if (tailLine.startsWith('data:')) {
+      eventDataLines.push(tailLine.slice(5).trimStart());
+    }
+    flushEventData();
   } catch (error) {
     if (error && error.name === 'AbortError') throw error;
     throw error;

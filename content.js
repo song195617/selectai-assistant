@@ -18,6 +18,7 @@ let shadowHost = null, shadowRoot = null, iconContainer = null, popup = null, re
 let currentSelection = '', port = null, lastMouseX = 0, lastMouseY = 0;
 let isDragging = false, dragOffsetX = 0, dragOffsetY = 0, isFixed = true;
 let isChatMode = false, chatHistory = [], currentStreamingMessage = '';
+let currentStreamingRawMessage = '', currentThinkingMessage = '';
 
 // --- Initialization ---
 
@@ -180,6 +181,8 @@ function createPopupFrame(targetRect, mode) {
 
   isFixed = true;
   currentStreamingMessage = '';
+  currentStreamingRawMessage = '';
+  currentThinkingMessage = '';
 
   popup = document.createElement('div');
   popup.id = 'ai-assist-popup';
@@ -277,10 +280,11 @@ function createPopupFrame(targetRect, mode) {
 function renderText(text) {
   if (!text) return '';
   const mathBlocks = [];
+  const mathTokenPrefix = `__AI_MATH_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}__`;
   const protectMath = (regex, isDisplay) => {
     text = text.replace(regex, (_, tex) => {
       mathBlocks.push({ tex, display: isDisplay });
-      return `MathPlaceholder${mathBlocks.length - 1}End`;
+      return `${mathTokenPrefix}${mathBlocks.length - 1}__`;
     });
   };
 
@@ -291,8 +295,10 @@ function renderText(text) {
 
   let html = marked.parse(text);
 
-  html = html.replace(/MathPlaceholder(\d+)End/g, (_, index) => {
-    const item = mathBlocks[index];
+  const placeholderPattern = new RegExp(`${mathTokenPrefix}(\\d+)__`, 'g');
+  html = html.replace(placeholderPattern, (_, index) => {
+    const item = mathBlocks[Number(index)];
+    if (!item) return '';
     try { return katex.renderToString(item.tex, { displayMode: item.display, throwOnError: false, fleqn: false }); }
     catch(e) { return item.tex; }
   });
@@ -301,6 +307,109 @@ function renderText(text) {
     ADD_TAGS: ['math', 'annotation', 'semantics', 'mtext', 'mn', 'mo', 'mi', 'jsp', 'span', 'table', 'tr', 'td', 'th', 'thead', 'tbody'],
     ADD_ATTR: ['class', 'style', 'aria-hidden', 'viewBox', 'd', 'fill', 'stroke', 'stroke-width']
   }) : html;
+}
+
+function splitThinkingAndAnswer(rawText) {
+  const source = typeof rawText === 'string' ? rawText : '';
+  const lowerSource = source.toLowerCase();
+  const tags = [
+    { open: '<think>', close: '</think>' },
+    { open: '<thinking>', close: '</thinking>' }
+  ];
+  let cursor = 0;
+  let thinking = '';
+  let answer = '';
+
+  while (cursor < source.length) {
+    let hitTag = null;
+    let openIndex = -1;
+    for (const tag of tags) {
+      const idx = lowerSource.indexOf(tag.open, cursor);
+      if (idx === -1) continue;
+      if (openIndex === -1 || idx < openIndex) {
+        openIndex = idx;
+        hitTag = tag;
+      }
+    }
+
+    if (!hitTag || openIndex === -1) {
+      answer += source.slice(cursor);
+      break;
+    }
+    answer += source.slice(cursor, openIndex);
+    const thinkingStart = openIndex + hitTag.open.length;
+    const closeIndex = lowerSource.indexOf(hitTag.close, thinkingStart);
+    if (closeIndex === -1) {
+      thinking += source.slice(thinkingStart);
+      break;
+    }
+    thinking += source.slice(thinkingStart, closeIndex);
+    cursor = closeIndex + hitTag.close.length;
+  }
+
+  return { thinking, answer };
+}
+
+function getThinkingPreview(text) {
+  const source = String(text || '').replace(/\r/g, '');
+  if (!source.trim()) return '思考中...';
+
+  const lines = source.split('\n');
+  const currentLine = lines[lines.length - 1] || '';
+  const normalizedCurrentLine = currentLine.replace(/\t/g, '    ');
+  if (normalizedCurrentLine.trim()) return normalizedCurrentLine;
+
+  for (let i = lines.length - 2; i >= 0; i--) {
+    const candidate = (lines[i] || '').replace(/\t/g, '    ');
+    if (candidate.trim()) return candidate;
+  }
+  return '思考中...';
+}
+
+function ensureTranslateRenderNodes(container) {
+  if (!container) return { thinkingEl: null, answerEl: null };
+  let answerEl = container.querySelector('.ai-translate-answer');
+  if (!answerEl) {
+    answerEl = document.createElement('div');
+    answerEl.className = 'ai-translate-answer';
+    container.appendChild(answerEl);
+  }
+  let thinkingEl = container.querySelector('.ai-thinking');
+  return { thinkingEl, answerEl };
+}
+
+function renderTranslateOutput(container) {
+  if (!container) return;
+  const parsed = splitThinkingAndAnswer(currentStreamingRawMessage);
+  currentThinkingMessage = parsed.thinking;
+  currentStreamingMessage = parsed.answer;
+
+  const nodes = ensureTranslateRenderNodes(container);
+  let thinkingEl = nodes.thinkingEl;
+  const answerEl = nodes.answerEl;
+  const shouldShowThinking = Boolean(parsed.thinking && parsed.thinking.trim());
+
+  if (shouldShowThinking) {
+    const wasOpen = Boolean(thinkingEl && thinkingEl.open);
+    if (!thinkingEl) {
+      thinkingEl = document.createElement('details');
+      thinkingEl.className = 'ai-thinking';
+      thinkingEl.innerHTML = `
+        <summary><span class="ai-thinking-summary-text"></span></summary>
+        <div class="ai-thinking-body"></div>
+      `;
+      container.insertBefore(thinkingEl, answerEl);
+    }
+    thinkingEl.open = wasOpen;
+    const summaryEl = thinkingEl.querySelector('.ai-thinking-summary-text');
+    const bodyEl = thinkingEl.querySelector('.ai-thinking-body');
+    if (summaryEl) summaryEl.textContent = getThinkingPreview(parsed.thinking);
+    if (bodyEl) bodyEl.textContent = parsed.thinking;
+  } else if (thinkingEl) {
+    thinkingEl.remove();
+  }
+
+  answerEl.innerHTML = parsed.answer ? renderText(parsed.answer) : '';
 }
 
 // --- Logic: Status & Networking ---
@@ -413,14 +522,25 @@ function connectAndSend(payload, onChunk, onDone, onError) {
 
   currentPort.onMessage.addListener((msg) => {
     if (!popup || port !== currentPort) return;
-    if (msg.type === 'chunk') {
+    if (msg.type === 'thinking' && !isChatMode) {
+      const el = popup.querySelector('#ai-popup-content');
+      const shouldScroll = isNearBottom(el);
+      if (el.querySelector('.ai-loading')) el.innerHTML = '';
+      currentThinkingMessage += (typeof msg.content === 'string' ? msg.content : '');
+      const answerText = currentStreamingMessage || '';
+      currentStreamingRawMessage = currentThinkingMessage
+        ? `<think>${currentThinkingMessage}</think>${answerText}`
+        : answerText;
+      renderTranslateOutput(el);
+      if (shouldScroll) scrollToBottom(el);
+    } else if (msg.type === 'chunk') {
       if (isChatMode && onChunk) onChunk(msg.content);
       else if (!isChatMode) {
         const el = popup.querySelector('#ai-popup-content');
         const shouldScroll = isNearBottom(el);
         if (el.querySelector('.ai-loading')) el.innerHTML = '';
-        currentStreamingMessage += msg.content;
-        el.innerHTML = renderText(currentStreamingMessage);
+        currentStreamingRawMessage += msg.content;
+        renderTranslateOutput(el);
         if (shouldScroll) scrollToBottom(el);
       }
     } else if (msg.type === 'error') {
@@ -449,6 +569,9 @@ function connectAndSend(payload, onChunk, onDone, onError) {
 }
 
 function startTranslation() {
+  currentStreamingMessage = '';
+  currentStreamingRawMessage = '';
+  currentThinkingMessage = '';
   popup.querySelector('#ai-popup-content').innerHTML = '<div class="ai-loading">思考中...</div>';
   updateTitleStatus('loading');
   connectAndSend({ action: 'translate', text: currentSelection });
@@ -461,7 +584,7 @@ function finalizeTranslateLoadingState() {
   const loader = contentEl.querySelector('.ai-loading');
   if (!loader) return;
   loader.remove();
-  if (!contentEl.textContent.trim()) {
+  if (!String(currentStreamingMessage || '').trim()) {
     const emptyMsg = document.createElement('div');
     emptyMsg.className = 'ai-error';
     emptyMsg.textContent = '模型未返回内容。';
@@ -477,6 +600,8 @@ function sendChatRequest() {
   responseDiv.appendChild(loadingSpan);
 
   currentStreamingMessage = '';
+  currentStreamingRawMessage = '';
+  currentThinkingMessage = '';
   updateTitleStatus('loading');
 
   connectAndSend({ action: 'chat', text: currentSelection, history: chatHistory.slice(0, -1) },

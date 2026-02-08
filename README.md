@@ -111,9 +111,10 @@ Web Page
 
 数据流说明：
 
-- API Key 与配置保存在浏览器 `chrome.storage.sync`。
+- 模型配置保存在 `chrome.storage.sync`，API Key 单独保存在 `chrome.storage.local`。
 - 选中文本与对话内容仅在你配置的模型接口请求中发送。
 - 渲染前经过净化/转义，降低页面注入风险。
+- 导出配置时默认不包含 API Key（可选手动包含）。
 
 ## 常见问题
 

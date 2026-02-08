@@ -33,6 +33,7 @@ const DEFAULT_SETTINGS = {
 };
 
 const THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)';
+const PROVIDER_KEYS_STORAGE_KEY = 'providerKeys';
 
 const I18N = {
   zh: {
@@ -102,6 +103,7 @@ const I18N = {
     status_batch_running: '正在并行测试 {count} 个模型（15 秒超时）...',
     status_batch_all_pass: '全部通过：{pass}/{total}',
     status_batch_partial: '通过 {pass}，失败 {fail}（共 {total}）',
+    status_storage_failed: '保存失败: {message}',
     err_config_invalid: '配置文件格式错误。',
     err_providers_required: 'providers 必须是非空数组。',
     err_provider_format: '第 {index} 个模型格式错误。',
@@ -109,7 +111,8 @@ const I18N = {
     err_provider_required: '第 {index} 个模型缺少必要字段。',
     err_provider_id_duplicate: '模型 ID 重复: {id}',
     err_background_unreachable: '无法连接后台服务。',
-    err_connectivity_failed: '模型连通性测试失败。'
+    err_connectivity_failed: '模型连通性测试失败。',
+    confirm_export_include_keys: '导出配置时包含 API Key？（不建议）'
   },
   en: {
     app_title: 'AI Assistant Settings',
@@ -178,6 +181,7 @@ const I18N = {
     status_batch_running: 'Testing {count} models in parallel (15s timeout)...',
     status_batch_all_pass: 'All passed: {pass}/{total}',
     status_batch_partial: 'Passed {pass}, failed {fail} (total {total})',
+    status_storage_failed: 'Save failed: {message}',
     err_config_invalid: 'Invalid config file format.',
     err_providers_required: '`providers` must be a non-empty array.',
     err_provider_format: 'Model #{index} has invalid format.',
@@ -185,7 +189,8 @@ const I18N = {
     err_provider_required: 'Model #{index} is missing required fields.',
     err_provider_id_duplicate: 'Duplicate model ID: {id}',
     err_background_unreachable: 'Cannot reach background service.',
-    err_connectivity_failed: 'Model connectivity test failed.'
+    err_connectivity_failed: 'Model connectivity test failed.',
+    confirm_export_include_keys: 'Include API keys in the exported config? (Not recommended)'
   }
 };
 
@@ -221,8 +226,22 @@ function loadSettings() {
       items.chatTemperature = 0.7;
       delete items.temperature;
     }
-    currentSettings = { ...DEFAULT_SETTINGS, ...items };
-    renderUI();
+    const syncSettings = { ...DEFAULT_SETTINGS, ...items };
+    chrome.storage.local.get({ [PROVIDER_KEYS_STORAGE_KEY]: {} }, (localItems) => {
+      const localKeys = normalizeProviderKeys(localItems[PROVIDER_KEYS_STORAGE_KEY]);
+      const merged = mergeProvidersWithKeys(syncSettings.providers, localKeys);
+      currentSettings = {
+        ...syncSettings,
+        providers: merged.providers
+      };
+      if (!merged.providers.some((p) => p.id === currentSettings.activeProviderId)) {
+        currentSettings.activeProviderId = merged.providers[0] ? merged.providers[0].id : '';
+      }
+      renderUI();
+      if (merged.migrated) {
+        persistCurrentSettings({ silent: true });
+      }
+    });
   });
 }
 
@@ -331,7 +350,7 @@ function startEdit(id) {
   document.getElementById('newType').value = provider.type;
   document.getElementById('newUrl').value = provider.url;
   document.getElementById('newModelName').value = provider.model;
-  document.getElementById('newKey').value = provider.key;
+  document.getElementById('newKey').value = provider.key || '';
 
   document.getElementById('saveModelBtn').style.background = '#007bff';
   document.getElementById('cancelEditBtn').style.display = 'inline-block';
@@ -395,8 +414,9 @@ async function handleModelFormSubmit(e) {
     showStatus(`\u2705 ${t('status_model_added')}`, '#28a745');
   }
 
+  currentSettings.providers = currentSettings.providers.map((provider, index) => sanitizeProviderShape(provider, index));
   renderUI();
-  chrome.storage.sync.set(currentSettings);
+  persistCurrentSettings({ silent: true });
 }
 
 function deleteProvider(id) {
@@ -410,8 +430,9 @@ function deleteProvider(id) {
   if (currentSettings.activeProviderId === id) {
     currentSettings.activeProviderId = currentSettings.providers[0].id;
   }
+  currentSettings.providers = currentSettings.providers.map((provider, index) => sanitizeProviderShape(provider, index));
   renderUI();
-  chrome.storage.sync.set(currentSettings);
+  persistCurrentSettings({ silent: true });
 }
 
 function clearForm() {
@@ -421,24 +442,23 @@ function clearForm() {
   document.getElementById('newKey').value = '';
 }
 
-function saveSettings() {
-  currentSettings.activeProviderId = document.getElementById('activeModelSelect').value;
-  currentSettings.transTemperature = parseFloat(document.getElementById('transTemperature').value);
-  currentSettings.chatTemperature = parseFloat(document.getElementById('chatTemperature').value);
-  currentSettings.maxTokens = parseInt(document.getElementById('maxTokens').value);
-  currentSettings.themeMode = sanitizeThemeMode(document.getElementById('themeMode').value, DEFAULT_SETTINGS.themeMode);
-  currentSettings.languageMode = sanitizeLanguageMode(document.getElementById('languageMode').value, DEFAULT_SETTINGS.languageMode);
-  currentSettings.translatePrompt = document.getElementById('translatePrompt').value;
-  currentSettings.chatPrompt = document.getElementById('chatPrompt').value;
+function saveSettings(options = {}) {
+  const { silent = false } = options;
+  applyFormValuesToSettings();
   applyOptionsTheme(currentSettings.themeMode);
   applyLocale();
   renderUI();
-  chrome.storage.sync.set(currentSettings, () => showStatus(`\u2705 ${t('status_settings_saved')}`, '#28a745'));
+  persistCurrentSettings({
+    silent,
+    successMessage: `\u2705 ${t('status_settings_saved')}`,
+    successColor: '#28a745'
+  });
 }
 
 function exportConfig() {
-  saveSettings();
-  const jsonStr = JSON.stringify(currentSettings, null, 2);
+  saveSettings({ silent: true });
+  const includeKeys = window.confirm(t('confirm_export_include_keys'));
+  const jsonStr = JSON.stringify(buildExportSettings(includeKeys), null, 2);
   const blob = new Blob([jsonStr], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -456,10 +476,11 @@ function importConfig(e) {
     try {
       const imported = JSON.parse(event.target.result);
       currentSettings = sanitizeImportedSettings(imported);
-      chrome.storage.sync.set(currentSettings, () => {
-        renderUI();
-        cancelEdit();
-        showStatus(`\u2705 ${t('status_import_success')}`, '#28a745');
+      renderUI();
+      cancelEdit();
+      persistCurrentSettings({
+        successMessage: `\u2705 ${t('status_import_success')}`,
+        successColor: '#28a745'
       });
     } catch (err) {
       showStatus(`\u274C ${t('status_import_failed', { message: err.message })}`, '#dc3545');
@@ -511,7 +532,7 @@ function sanitizeProvider(provider, index) {
   const label = normalizeString(provider.label);
   const url = normalizeString(provider.url);
   const model = normalizeString(provider.model);
-  if (!label || !url || !model) {
+  if (!label || !url) {
     throw new Error(t('err_provider_required', { index: idx }));
   }
 
@@ -555,6 +576,149 @@ function sanitizeLanguageMode(value, fallback) {
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeProviderKeys(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const keys = {};
+  Object.keys(value).forEach((providerId) => {
+    const key = normalizeString(value[providerId]);
+    if (key) keys[providerId] = key;
+  });
+  return keys;
+}
+
+function mergeProvidersWithKeys(providersInput, localKeys) {
+  const sourceProviders = Array.isArray(providersInput) && providersInput.length > 0
+    ? providersInput
+    : DEFAULT_PROVIDERS;
+  const mergedKeys = { ...localKeys };
+  let migrated = false;
+  const providers = sourceProviders.map((provider, index) => {
+    const normalized = sanitizeProviderShape(provider, index);
+    const syncKey = normalizeString(provider && provider.key);
+    if (syncKey && !mergedKeys[normalized.id]) {
+      mergedKeys[normalized.id] = syncKey;
+      migrated = true;
+    }
+    return {
+      ...normalized,
+      key: mergedKeys[normalized.id] || syncKey
+    };
+  });
+  return { providers, keyMap: mergedKeys, migrated };
+}
+
+function sanitizeProviderShape(provider, index) {
+  const safeProvider = provider && typeof provider === 'object' && !Array.isArray(provider) ? provider : {};
+  const id = getProviderId(safeProvider, index);
+  const type = normalizeString(safeProvider.type);
+  const normalizedType = (type === 'openai' || type === 'google') ? type : 'openai';
+  return {
+    id,
+    label: normalizeString(safeProvider.label),
+    type: normalizedType,
+    url: normalizeString(safeProvider.url),
+    model: normalizeString(safeProvider.model),
+    key: normalizeString(safeProvider.key)
+  };
+}
+
+function applyFormValuesToSettings() {
+  currentSettings.providers = currentSettings.providers.map((provider, index) => sanitizeProviderShape(provider, index));
+  const providerIds = new Set(currentSettings.providers.map((provider) => provider.id));
+  const activeProviderId = normalizeString(document.getElementById('activeModelSelect').value);
+  currentSettings.activeProviderId = providerIds.has(activeProviderId)
+    ? activeProviderId
+    : (currentSettings.providers[0] ? currentSettings.providers[0].id : '');
+  currentSettings.transTemperature = sanitizeTemperature(
+    document.getElementById('transTemperature').value,
+    DEFAULT_SETTINGS.transTemperature
+  );
+  currentSettings.chatTemperature = sanitizeTemperature(
+    document.getElementById('chatTemperature').value,
+    DEFAULT_SETTINGS.chatTemperature
+  );
+  currentSettings.maxTokens = sanitizeMaxTokens(
+    document.getElementById('maxTokens').value,
+    DEFAULT_SETTINGS.maxTokens
+  );
+  currentSettings.themeMode = sanitizeThemeMode(
+    document.getElementById('themeMode').value,
+    DEFAULT_SETTINGS.themeMode
+  );
+  currentSettings.languageMode = sanitizeLanguageMode(
+    document.getElementById('languageMode').value,
+    DEFAULT_SETTINGS.languageMode
+  );
+  currentSettings.translatePrompt = sanitizePrompt(
+    document.getElementById('translatePrompt').value,
+    DEFAULT_SETTINGS.translatePrompt
+  );
+  currentSettings.chatPrompt = sanitizePrompt(
+    document.getElementById('chatPrompt').value,
+    DEFAULT_SETTINGS.chatPrompt
+  );
+}
+
+function buildSyncSettingsPayload() {
+  return {
+    ...currentSettings,
+    providers: currentSettings.providers.map((provider, index) => {
+      const normalized = sanitizeProviderShape(provider, index);
+      return { ...normalized, key: '' };
+    })
+  };
+}
+
+function buildProviderKeysPayload() {
+  const keyMap = {};
+  currentSettings.providers.forEach((provider, index) => {
+    const normalized = sanitizeProviderShape(provider, index);
+    if (normalized.key) keyMap[normalized.id] = normalized.key;
+  });
+  return keyMap;
+}
+
+function buildExportSettings(includeKeys) {
+  return {
+    ...currentSettings,
+    providers: currentSettings.providers.map((provider, index) => {
+      const normalized = sanitizeProviderShape(provider, index);
+      return {
+        ...normalized,
+        key: includeKeys ? normalized.key : ''
+      };
+    })
+  };
+}
+
+function persistCurrentSettings(options = {}) {
+  const {
+    silent = false,
+    successMessage = '',
+    successColor = '#28a745'
+  } = options;
+  const keyPayload = buildProviderKeysPayload();
+  const syncPayload = buildSyncSettingsPayload();
+
+  chrome.storage.local.set({ [PROVIDER_KEYS_STORAGE_KEY]: keyPayload }, () => {
+    const localErr = chrome.runtime.lastError;
+    if (localErr) {
+      if (!silent) showStatus(`\u274C ${t('status_storage_failed', { message: localErr.message || '' })}`, '#dc3545');
+      return;
+    }
+    chrome.storage.sync.set(syncPayload, () => {
+      const syncErr = chrome.runtime.lastError;
+      if (syncErr) {
+        if (!silent) showStatus(`\u274C ${t('status_storage_failed', { message: syncErr.message || '' })}`, '#dc3545');
+        return;
+      }
+      if (!silent && successMessage) {
+        showStatus(successMessage, successColor);
+      }
+    });
+  });
 }
 
 function showStatus(msg, color) {
