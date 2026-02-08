@@ -61,38 +61,68 @@ function renderUI() {
   document.getElementById('chatPrompt').value = currentSettings.chatPrompt;
 
   const listEl = document.getElementById('modelList');
-  listEl.innerHTML = '';
+  listEl.textContent = '';
   const selectEl = document.getElementById('activeModelSelect');
-  selectEl.innerHTML = '';
+  selectEl.textContent = '';
 
-  currentSettings.providers.forEach(p => {
+  currentSettings.providers.forEach((p, index) => {
+    const providerId = normalizeString(p.id) || `provider-${index}`;
+    const providerLabel = typeof p.label === 'string' ? p.label : '';
+    const providerType = typeof p.type === 'string' ? p.type.toUpperCase() : 'UNKNOWN';
+    const providerModel = typeof p.model === 'string' ? p.model : '';
+
     const item = document.createElement('div');
     item.className = 'model-item';
-    item.innerHTML = `
-      <div class="model-info">
-        <span class="model-name">${escapeHtml(p.label)}</span>
-        <span class="model-sub">${p.type.toUpperCase()} - ${p.model}</span>
-      </div>
-      <div class="item-actions">
-        <span class="btn-icon btn-edit" data-id="${p.id}" title="编辑">&#9998;</span>
-        <span class="btn-icon btn-delete" data-id="${p.id}" title="删除">&times;</span>
-      </div>
-    `;
+
+    const modelInfo = document.createElement('div');
+    modelInfo.className = 'model-info';
+
+    const modelName = document.createElement('span');
+    modelName.className = 'model-name';
+    modelName.textContent = providerLabel;
+
+    const modelSub = document.createElement('span');
+    modelSub.className = 'model-sub';
+    modelSub.textContent = `${providerType} - ${providerModel}`;
+
+    modelInfo.appendChild(modelName);
+    modelInfo.appendChild(modelSub);
+
+    const itemActions = document.createElement('div');
+    itemActions.className = 'item-actions';
+
+    const editBtn = document.createElement('span');
+    editBtn.className = 'btn-icon btn-edit';
+    editBtn.dataset.id = providerId;
+    editBtn.title = '编辑';
+    editBtn.textContent = '\u270E';
+    editBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      startEdit(providerId);
+    });
+
+    const deleteBtn = document.createElement('span');
+    deleteBtn.className = 'btn-icon btn-delete';
+    deleteBtn.dataset.id = providerId;
+    deleteBtn.title = '删除';
+    deleteBtn.textContent = '\u00D7';
+    deleteBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      deleteProvider(providerId);
+    });
+
+    itemActions.appendChild(editBtn);
+    itemActions.appendChild(deleteBtn);
+    item.appendChild(modelInfo);
+    item.appendChild(itemActions);
     listEl.appendChild(item);
 
     const option = document.createElement('option');
-    option.value = p.id;
-    option.textContent = p.label;
-    if (p.id === currentSettings.activeProviderId) option.selected = true;
+    option.value = providerId;
+    option.textContent = providerLabel;
+    if (providerId === currentSettings.activeProviderId) option.selected = true;
     selectEl.appendChild(option);
-  });
-
-  document.querySelectorAll('.btn-delete').forEach(btn => {
-    btn.addEventListener('click', (e) => { e.preventDefault(); deleteProvider(e.target.dataset.id); });
-  });
-
-  document.querySelectorAll('.btn-edit').forEach(btn => {
-    btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); startEdit(e.target.dataset.id); });
   });
 }
 
@@ -206,8 +236,7 @@ function importConfig(e) {
   reader.onload = (event) => {
     try {
       const imported = JSON.parse(event.target.result);
-      if (!imported.providers) throw new Error("配置文件格式错误。");
-      currentSettings = { ...DEFAULT_SETTINGS, ...imported };
+      currentSettings = sanitizeImportedSettings(imported);
       chrome.storage.sync.set(currentSettings, () => {
         renderUI();
         cancelEdit();
@@ -221,14 +250,86 @@ function importConfig(e) {
   e.target.value = '';
 }
 
+function sanitizeImportedSettings(imported) {
+  if (!imported || typeof imported !== 'object' || Array.isArray(imported)) {
+    throw new Error('配置文件格式错误。');
+  }
+
+  if (!Array.isArray(imported.providers) || imported.providers.length === 0) {
+    throw new Error('providers 必须是非空数组。');
+  }
+
+  const providers = imported.providers.map((provider, index) => sanitizeProvider(provider, index));
+  const idSet = new Set();
+  for (let i = 0; i < providers.length; i++) {
+    const providerId = providers[i].id;
+    if (idSet.has(providerId)) throw new Error(`模型 ID 重复: ${providerId}`);
+    idSet.add(providerId);
+  }
+
+  const activeProviderId = normalizeString(imported.activeProviderId);
+  return {
+    providers,
+    activeProviderId: idSet.has(activeProviderId) ? activeProviderId : providers[0].id,
+    transTemperature: sanitizeTemperature(imported.transTemperature, DEFAULT_SETTINGS.transTemperature),
+    chatTemperature: sanitizeTemperature(imported.chatTemperature, DEFAULT_SETTINGS.chatTemperature),
+    maxTokens: sanitizeMaxTokens(imported.maxTokens, DEFAULT_SETTINGS.maxTokens),
+    translatePrompt: sanitizePrompt(imported.translatePrompt, DEFAULT_SETTINGS.translatePrompt),
+    chatPrompt: sanitizePrompt(imported.chatPrompt, DEFAULT_SETTINGS.chatPrompt)
+  };
+}
+
+function sanitizeProvider(provider, index) {
+  if (!provider || typeof provider !== 'object' || Array.isArray(provider)) {
+    throw new Error(`第 ${index + 1} 个模型格式错误。`);
+  }
+
+  const type = normalizeString(provider.type);
+  if (type !== 'openai' && type !== 'google') {
+    throw new Error(`第 ${index + 1} 个模型 type 仅支持 openai/google。`);
+  }
+
+  const label = normalizeString(provider.label);
+  const url = normalizeString(provider.url);
+  const model = normalizeString(provider.model);
+  if (!label || !url || !model) {
+    throw new Error(`第 ${index + 1} 个模型缺少必要字段。`);
+  }
+
+  return {
+    id: normalizeString(provider.id) || `imported-${Date.now()}-${index}`,
+    label: label,
+    type: type,
+    url: url,
+    model: model,
+    key: typeof provider.key === 'string' ? provider.key.trim() : ''
+  };
+}
+
+function sanitizeTemperature(value, fallback) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(2, Math.max(0, num));
+}
+
+function sanitizeMaxTokens(value, fallback) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  const intValue = Math.floor(num);
+  return Math.min(65536, Math.max(128, intValue));
+}
+
+function sanitizePrompt(value, fallback) {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function normalizeString(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 function showStatus(msg, color) {
   const el = document.getElementById('status');
   el.textContent = msg;
   el.style.color = color;
   setTimeout(() => el.textContent = '', 3000);
-}
-
-function escapeHtml(text) {
-  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-  return text.replace(/[&<>"']/g, function(m) { return map[m]; });
 }

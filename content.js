@@ -11,6 +11,7 @@ const ICON_LOADING = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none
 const ICON_DONE = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg>`;
 const ICON_ERROR = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`;
 const ICON_STOP = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect></svg>`;
+const PORT_DISCONNECT_DELAY_MS = 50;
 
 let shadowHost = null, shadowRoot = null, iconContainer = null, popup = null, resizeObserver = null;
 let currentSelection = '', port = null, lastMouseX = 0, lastMouseY = 0;
@@ -265,7 +266,7 @@ function updateTitleStatus(state) {
 }
 
 function handleStop() {
-  if (port) { port.disconnect(); port = null; }
+  disconnectCurrentPort(true);
   updateTitleStatus('done');
   const el = popup ? popup.querySelector('#ai-popup-content') : null;
   if (el) {
@@ -274,13 +275,32 @@ function handleStop() {
   }
 }
 
-function connectAndSend(payload, onChunk, onDone, onError) {
-  if (port) port.disconnect();
-  port = chrome.runtime.connect({ name: 'ai-stream' });
-  port.postMessage(payload);
+function disconnectPort(targetPort, sendCancel) {
+  if (!targetPort) return;
+  if (sendCancel) {
+    try { targetPort.postMessage({ action: 'cancel' }); } catch (e) {}
+    setTimeout(() => {
+      try { targetPort.disconnect(); } catch (e) {}
+    }, PORT_DISCONNECT_DELAY_MS);
+    return;
+  }
+  try { targetPort.disconnect(); } catch (e) {}
+}
 
-  port.onMessage.addListener((msg) => {
-    if (!popup) return;
+function disconnectCurrentPort(sendCancel) {
+  const targetPort = port;
+  port = null;
+  disconnectPort(targetPort, sendCancel);
+}
+
+function connectAndSend(payload, onChunk, onDone, onError) {
+  disconnectCurrentPort(false);
+  const currentPort = chrome.runtime.connect({ name: 'ai-stream' });
+  port = currentPort;
+  currentPort.postMessage(payload);
+
+  currentPort.onMessage.addListener((msg) => {
+    if (!popup || port !== currentPort) return;
     if (msg.type === 'chunk') {
       if (isChatMode && onChunk) onChunk(msg.content);
       else if (!isChatMode) {
@@ -294,11 +314,19 @@ function connectAndSend(payload, onChunk, onDone, onError) {
     } else if (msg.type === 'error') {
       updateTitleStatus('error');
       if (onError) onError(msg.content);
-      else popup.querySelector('#ai-popup-content').innerHTML = `<div class="ai-error">Error: ${msg.content}</div>`;
+      else {
+        const contentEl = popup.querySelector('#ai-popup-content');
+        const err = document.createElement('div');
+        err.className = 'ai-error';
+        err.textContent = `Error: ${msg.content}`;
+        contentEl.textContent = '';
+        contentEl.appendChild(err);
+      }
+      disconnectCurrentPort(false);
     } else if (msg.type === 'done') {
       if (!isChatMode) updateTitleStatus('done');
       if (onDone) onDone();
-      port.disconnect();
+      disconnectCurrentPort(false);
     }
   });
 }

@@ -1,11 +1,42 @@
+const activeRequests = new WeakMap();
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "ai-stream") return;
+
+  activeRequests.set(port, { controller: null });
+
+  port.onDisconnect.addListener(() => {
+    cancelActiveRequest(port);
+  });
+
   port.onMessage.addListener(async (msg) => {
-    if (msg.action) await processAIRequest(msg, port);
+    if (!msg || !msg.action) return;
+    if (msg.action === 'cancel') {
+      cancelActiveRequest(port);
+      return;
+    }
+    await processAIRequest(msg, port);
   });
 });
 
+function cancelActiveRequest(port) {
+  const state = activeRequests.get(port);
+  if (!state || !state.controller) return;
+  try { state.controller.abort(); } catch (e) {}
+  state.controller = null;
+}
+
+function tryPostMessage(port, payload) {
+  try {
+    port.postMessage(payload);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 async function processAIRequest(msg, port) {
+  let controller = null;
   try {
     const settings = await chrome.storage.sync.get({
       providers: [],
@@ -35,7 +66,17 @@ async function processAIRequest(msg, port) {
       activeTemperature = settings.chatTemperature;
     }
 
-    const requestConfig = { ...settings, temperature: activeTemperature };
+    cancelActiveRequest(port);
+    const state = activeRequests.get(port);
+    if (!state) return;
+    controller = new AbortController();
+    state.controller = controller;
+
+    const requestConfig = {
+      ...settings,
+      temperature: activeTemperature,
+      signal: controller.signal
+    };
 
     if (activeProvider.type === 'google') {
       await handleGoogleGenAI(activeProvider, messages, requestConfig, port);
@@ -45,7 +86,17 @@ async function processAIRequest(msg, port) {
       throw new Error(`未知模型类型: ${activeProvider.type}`);
     }
   } catch (error) {
-    port.postMessage({ type: 'error', content: error.message });
+    if (error && error.name === 'AbortError') {
+      const state = activeRequests.get(port);
+      if (state && state.controller === controller) {
+        tryPostMessage(port, { type: 'done' });
+      }
+      return;
+    }
+    tryPostMessage(port, { type: 'error', content: error.message });
+  } finally {
+    const state = activeRequests.get(port);
+    if (state && state.controller === controller) state.controller = null;
   }
 }
 
@@ -81,6 +132,7 @@ async function handleGoogleGenAI(config, messages, settings, port) {
   const response = await fetch(urlWithKey, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: settings.signal,
     body: JSON.stringify(payload)
   });
 
@@ -109,6 +161,7 @@ async function handleOpenAICompatible(config, messages, settings, port) {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${config.key}`
     },
+    signal: settings.signal,
     body: JSON.stringify(payload)
   });
 
@@ -124,60 +177,70 @@ async function readStreamWithBracketCounting(response, port, extractor) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let braceCount = 0, jsonStartIndex = -1, inString = false, escape = false;
-    for (let i = 0; i < buffer.length; i++) {
-      const char = buffer[i];
-      if (char === '"' && !escape) inString = !inString;
-      if (char === '\\' && !escape) escape = true; else escape = false;
-      if (!inString) {
-        if (char === '{') {
-          if (braceCount === 0) jsonStartIndex = i;
-          braceCount++;
-        } else if (char === '}') {
-          braceCount--;
-          if (braceCount === 0 && jsonStartIndex !== -1) {
-            const jsonStr = buffer.substring(jsonStartIndex, i + 1);
-            try {
-              const json = JSON.parse(jsonStr);
-              const chunk = extractor(json);
-              if (chunk) port.postMessage({ type: 'chunk', content: chunk });
-            } catch (e) {}
-            buffer = buffer.substring(i + 1); i = -1; jsonStartIndex = -1;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let braceCount = 0, jsonStartIndex = -1, inString = false, escape = false;
+      for (let i = 0; i < buffer.length; i++) {
+        const char = buffer[i];
+        if (char === '"' && !escape) inString = !inString;
+        if (char === '\\' && !escape) escape = true; else escape = false;
+        if (!inString) {
+          if (char === '{') {
+            if (braceCount === 0) jsonStartIndex = i;
+            braceCount++;
+          } else if (char === '}') {
+            braceCount--;
+            if (braceCount === 0 && jsonStartIndex !== -1) {
+              const jsonStr = buffer.substring(jsonStartIndex, i + 1);
+              try {
+                const json = JSON.parse(jsonStr);
+                const chunk = extractor(json);
+                if (chunk) tryPostMessage(port, { type: 'chunk', content: chunk });
+              } catch (e) {}
+              buffer = buffer.substring(i + 1); i = -1; jsonStartIndex = -1;
+            }
           }
         }
       }
     }
+  } catch (error) {
+    if (error && error.name === 'AbortError') throw error;
+    throw error;
   }
-  port.postMessage({ type: 'done' });
+  tryPostMessage(port, { type: 'done' });
 }
 
 async function readStreamSSE(response, port) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop();
-    for (let line of lines) {
-      line = line.trim();
-      if (!line) continue;
-      if (line.startsWith('data: ')) {
-        const dataStr = line.slice(6);
-        if (dataStr === '[DONE]') continue;
-        try {
-          const json = JSON.parse(dataStr);
-          const chunk = json.choices?.[0]?.delta?.content;
-          if (chunk) port.postMessage({ type: 'chunk', content: chunk });
-        } catch (e) {}
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (let line of lines) {
+        line = line.trim();
+        if (!line) continue;
+        if (line.startsWith('data: ')) {
+          const dataStr = line.slice(6);
+          if (dataStr === '[DONE]') continue;
+          try {
+            const json = JSON.parse(dataStr);
+            const chunk = json.choices?.[0]?.delta?.content;
+            if (chunk) tryPostMessage(port, { type: 'chunk', content: chunk });
+          } catch (e) {}
+        }
       }
     }
+  } catch (error) {
+    if (error && error.name === 'AbortError') throw error;
+    throw error;
   }
-  port.postMessage({ type: 'done' });
+  tryPostMessage(port, { type: 'done' });
 }
