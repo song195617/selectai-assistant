@@ -187,14 +187,6 @@ function injectStyle(cssContent) {
   shadowRoot.appendChild(style);
 }
 
-async function injectExternalStyle(url) {
-  try {
-    const res = await fetch(url);
-    const css = await res.text();
-    injectStyle(css);
-  } catch(e) { console.warn(`Failed to load CSS: ${url}`); }
-}
-
 function injectStylesheetLink(url) {
   return new Promise((resolve) => {
     const link = document.createElement('link');
@@ -411,7 +403,7 @@ function renderText(text) {
 
   return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html, {
     ADD_TAGS: ['math', 'annotation', 'semantics', 'mtext', 'mn', 'mo', 'mi', 'span', 'table', 'tr', 'td', 'th', 'thead', 'tbody'],
-    ADD_ATTR: ['class', 'style', 'aria-hidden', 'viewBox', 'd', 'fill', 'stroke', 'stroke-width']
+    ADD_ATTR: ['class', 'style', 'aria-hidden']
   }) : html;
 }
 
