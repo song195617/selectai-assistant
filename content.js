@@ -1,5 +1,5 @@
 // --- Constants & Globals ---
-const KATEX_CSS_URL = "https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css";
+const KATEX_CSS_PATH = "lib/katex.min.css";
 const CRITICAL_BTN_CSS = `
   #ai-btn-container { display: flex; gap: 8px; position: absolute; z-index: 1000; font-family: sans-serif; pointer-events: auto; }
   .ai-float-btn { width: 32px; height: 32px; background: white; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); cursor: pointer; display: flex; align-items: center; justify-content: center; color: #4285F4; transition: transform 0.1s; }
@@ -29,9 +29,10 @@ async function getShadowRoot() {
   shadowRoot = shadowHost.attachShadow({ mode: 'open' });
 
   injectStyle(CRITICAL_BTN_CSS);
-  await injectExternalStyle(KATEX_CSS_URL);
+  const katexCssUrl = safeRuntimeGetURL(KATEX_CSS_PATH);
+  if (katexCssUrl) await injectStylesheetLink(katexCssUrl);
   const localCssUrl = safeRuntimeGetURL('content.css');
-  if (localCssUrl) await injectExternalStyle(localCssUrl);
+  if (localCssUrl) await injectStylesheetLink(localCssUrl);
 
   document.documentElement.appendChild(shadowHost);
   updateHostSize();
@@ -87,6 +88,20 @@ async function injectExternalStyle(url) {
     const css = await res.text();
     injectStyle(css);
   } catch(e) { console.warn(`Failed to load CSS: ${url}`); }
+}
+
+function injectStylesheetLink(url) {
+  return new Promise((resolve) => {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = url;
+    link.onload = () => resolve();
+    link.onerror = () => {
+      console.warn(`Failed to load stylesheet link: ${url}`);
+      resolve();
+    };
+    shadowRoot.appendChild(link);
+  });
 }
 
 function updateHostSize() {
