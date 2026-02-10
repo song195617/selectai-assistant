@@ -377,6 +377,7 @@ function createPopupFrame(targetRect, mode) {
 
 function renderText(text) {
   if (!text) return '';
+
   const displayMathEnvs = new Set([
     'equation', 'equation*',
     'align', 'align*', 'aligned',
@@ -389,16 +390,24 @@ function renderText(text) {
     'matrix', 'matrix*',
     'pmatrix', 'pmatrix*',
     'bmatrix', 'bmatrix*',
-    'Bmatrix', 'Bmatrix*',
     'vmatrix', 'vmatrix*',
-    'Vmatrix', 'Vmatrix*',
     'smallmatrix'
   ]);
-  const latexMathKeywordPattern = /\\(?:frac|sum|int|prod|lim|sqrt|sin|cos|tan|cot|sec|csc|log|ln|exp|theta|alpha|beta|gamma|delta|epsilon|lambda|mu|pi|sigma|omega|cdot|times|leq|geq|neq|infty|partial|nabla)\b/i;
-  const hasMathDelimiters = (value) => /\$\$[\s\S]*\$\$|\$[^\$\n]+\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|\\begin\{[A-Za-z*]+\}[\s\S]*?\\end\{[A-Za-z*]+\}/.test(value);
+  const latexMathKeywordPattern = /\\(?:frac|dfrac|tfrac|sum|int|iint|iiint|prod|lim|sqrt|sin|cos|tan|cot|sec|csc|log|ln|exp|theta|alpha|beta|gamma|delta|epsilon|lambda|mu|pi|sigma|omega|cdot|times|leq|geq|neq|infty|partial|nabla|left|right|operatorname|mathrm|mathbf|mathbb)\b/i;
+  const hasMathDelimiters = (value) => /\$\$[\s\S]*\$\$|\$[^\$\n]+\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|\\begin\{[A-Za-z*@]+\}[\s\S]*?\\end\{[A-Za-z*@]+\}/.test(value);
+  const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const isEscaped = (source, index) => {
+    let slashCount = 0;
+    let cursor = index - 1;
+    while (cursor >= 0 && source[cursor] === '\\') {
+      slashCount += 1;
+      cursor -= 1;
+    }
+    return slashCount % 2 === 1;
+  };
   const looksLikeBareLatexMath = (value) => {
     const source = String(value || '').trim();
-    if (!source || source.length < 2 || source.length > 500) return false;
+    if (!source || source.length < 2 || source.length > 800) return false;
     if (source.includes('`') || /^#{1,6}\s/.test(source) || /^[-*+]\s/.test(source) || /^\d+\.\s/.test(source) || /^>/.test(source)) return false;
     if (hasMathDelimiters(source) || /https?:\/\//i.test(source)) return false;
     const hasLatexCommand = /\\[A-Za-z]+/.test(source);
@@ -412,11 +421,83 @@ function renderText(text) {
     if (!(hasMathOps || hasMathKeyword || hasLatexCommand)) return false;
     return true;
   };
+  const hasLikelyMathContent = (value) => {
+    const source = String(value || '').trim();
+    if (!source || source.length > 2000) return false;
+    if (/^\d+(?:[.,]\d+)?$/.test(source) || /^[A-Za-z]+$/.test(source)) return false;
+    if (/[\\{}^_&]/.test(source)) return true;
+    if (latexMathKeywordPattern.test(source)) return true;
+    if (/[=+\-*/<>]/.test(source) && /[A-Za-z0-9]/.test(source)) return true;
+    return false;
+  };
+  const normalizeMathTexForKatex = (source, isDisplay) => {
+    let output = String(source || '').replace(/\r/g, '');
+    let previous = '';
+    while (output !== previous) {
+      previous = output;
+      output = output.replace(/\\\\(?=[A-Za-z])/g, '\\');
+    }
+    output = output.trim();
+    if (!output) return output;
+
+    // Some model outputs wrap math repeatedly (e.g. "\(...\)" inside $$...$$).
+    // KaTeX renderToString expects raw TeX without delimiters, so unwrap outer pairs.
+    let unwrapPrev = '';
+    while (output !== unwrapPrev) {
+      unwrapPrev = output;
+      if (/^\\\([\s\S]*\\\)$/.test(output)) {
+        output = output.slice(2, -2).trim();
+        continue;
+      }
+      if (/^\\\[[\s\S]*\\\]$/.test(output)) {
+        output = output.slice(2, -2).trim();
+        continue;
+      }
+      if (/^\$\$[\s\S]*\$\$$/.test(output)) {
+        output = output.slice(2, -2).trim();
+        continue;
+      }
+      if (/^\$[\s\S]*\$$/.test(output)) {
+        output = output.slice(1, -1).trim();
+      }
+    }
+    if (!output) return output;
+
+    if (isDisplay) {
+      output = output
+        .split('\n')
+        .map((line) => line.replace(/[ \t]+$/g, ''))
+        .join('\n')
+        .replace(/\\\\[ \t]+\n/g, '\\\\\n');
+      const hasEnvironment = /\\begin\{[A-Za-z*@]+\}/.test(output);
+      const hasAlignMarkers = /&/.test(output) || /\\\\/.test(output);
+      const hasLineBreak = output.includes('\n');
+      if (!hasEnvironment && hasAlignMarkers && (hasLineBreak || /\\\\/.test(output))) {
+        output = `\\begin{aligned}\n${output}\n\\end{aligned}`;
+      }
+    }
+    return output;
+  };
+  const normalizeEscapedMathDelimiters = (source) => {
+    let output = String(source || '');
+    let previous = '';
+    while (output !== previous) {
+      previous = output;
+      output = output
+        .replace(/\\\\\(/g, '\\(')
+        .replace(/\\\\\)/g, '\\)')
+        .replace(/\\\\\[/g, '\\[')
+        .replace(/\\\\\]/g, '\\]')
+        .replace(/\\\\begin\{/g, '\\begin{')
+        .replace(/\\\\end\{/g, '\\end{');
+    }
+    return output;
+  };
   const autoWrapBareLatexMath = (rawText) => {
     if (!rawText || !/[\\^_]/.test(rawText)) return rawText;
     const lines = String(rawText).split('\n');
     let inFence = false;
-    const inlineFormulaPattern = /([A-Za-z0-9{}\\^_]+(?:\s*[=+\-*/<>]\s*[A-Za-z0-9{}\\^_]+)+)/g;
+    const inlineFormulaPattern = /([A-Za-z0-9()[\]{}\\^_.,]+(?:\s*[=+\-*/<>]\s*[A-Za-z0-9()[\]{}\\^_.,]+)+)/g;
     return lines.map((line) => {
       const trimmedLine = line.trim();
       if (/^```/.test(trimmedLine) || /^~~~/.test(trimmedLine)) {
@@ -451,31 +532,62 @@ function renderText(text) {
       });
     }).join('\n');
   };
-  const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const normalizeMathTexForKatex = (source) => {
-    let output = String(source || '').replace(/\r/g, '');
-    let previous = '';
-    while (output !== previous) {
-      previous = output;
-      output = output.replace(/\\\\(?=[A-Za-z])/g, '\\');
-    }
-    return output;
+  const shouldTreatEnvironmentAsMath = (envName, rawBlock) => {
+    const normalized = String(envName || '').toLowerCase();
+    if (displayMathEnvs.has(normalized)) return true;
+    if (/^(?:itemize|enumerate|description|center|flushleft|flushright|quote|quotation|verbatim|lstlisting|tabular|table|figure|thebibliography|document)$/.test(normalized)) return false;
+    const body = String(rawBlock || '')
+      .replace(new RegExp(`^\\\\begin\\{${escapeRegExp(envName)}\\}`), '')
+      .replace(new RegExp(`\\\\end\\{${escapeRegExp(envName)}\\}$`), '')
+      .trim();
+    if (/\\item\b/.test(body)) return false;
+    return hasLikelyMathContent(body);
   };
-  const normalizeEscapedMathDelimiters = (source) => {
-    let output = String(source || '');
-    let previous = '';
-    while (output !== previous) {
-      previous = output;
-      output = output
-        .replace(/\\\\\(/g, '\\(')
-        .replace(/\\\\\)/g, '\\)')
-        .replace(/\\\\\[/g, '\\[')
-        .replace(/\\\\\]/g, '\\]')
-        .replace(/\\\\begin\{/g, '\\begin{')
-        .replace(/\\\\end\{/g, '\\end{');
+  const findMarkerEnd = (source, marker, startIndex, stopAtLineBreak) => {
+    let cursor = startIndex;
+    while (cursor <= source.length - marker.length) {
+      if (stopAtLineBreak && (source[cursor] === '\n' || source[cursor] === '\r')) return -1;
+      if (source.startsWith(marker, cursor) && !isEscaped(source, cursor)) return cursor;
+      cursor += 1;
     }
-    return output;
+    return -1;
   };
+  const findInlineDollarEnd = (source, startIndex) => {
+    let cursor = startIndex;
+    while (cursor < source.length) {
+      const ch = source[cursor];
+      if (ch === '\n' || ch === '\r') return -1;
+      if (ch === '$' && !isEscaped(source, cursor) && !source.startsWith('$$', cursor)) {
+        const before = source[cursor - 1] || '';
+        const after = source[cursor + 1] || '';
+        if (!/\s/.test(before) && !(/\d/.test(before) && /\d/.test(after))) return cursor;
+      }
+      cursor += 1;
+    }
+    return -1;
+  };
+  const findEnvironmentEnd = (source, startIndex, envName) => {
+    const beginTag = `\\begin{${envName}}`;
+    const endTag = `\\end{${envName}}`;
+    let depth = 0;
+    let cursor = startIndex;
+    while (cursor < source.length) {
+      if (source.startsWith(beginTag, cursor) && !isEscaped(source, cursor)) {
+        depth += 1;
+        cursor += beginTag.length;
+        continue;
+      }
+      if (source.startsWith(endTag, cursor) && !isEscaped(source, cursor)) {
+        depth -= 1;
+        cursor += endTag.length;
+        if (depth === 0) return cursor;
+        continue;
+      }
+      cursor += 1;
+    }
+    return -1;
+  };
+
   const mathBlocks = [];
   const codeBlocks = [];
   const mathTokenPrefix = `AIMATHTOKEN${Date.now().toString(36)}${Math.random().toString(36).slice(2)}X`;
@@ -505,65 +617,19 @@ function renderText(text) {
       return typeof block === 'string' ? block : '';
     });
   };
-  const isEscaped = (source, index) => {
-    let slashCount = 0;
-    let cursor = index - 1;
-    while (cursor >= 0 && source[cursor] === '\\') {
-      slashCount += 1;
-      cursor -= 1;
-    }
-    return slashCount % 2 === 1;
-  };
-  const findMarkerEnd = (source, marker, startIndex, stopAtLineBreak) => {
-    let cursor = startIndex;
-    while (cursor <= source.length - marker.length) {
-      if (stopAtLineBreak && (source[cursor] === '\n' || source[cursor] === '\r')) return -1;
-      if (source.startsWith(marker, cursor) && !isEscaped(source, cursor)) return cursor;
-      cursor += 1;
-    }
-    return -1;
-  };
-  const findMathEnvironmentEnd = (source, startIndex, envName) => {
-    const beginTag = `\\begin{${envName}}`;
-    const endTag = `\\end{${envName}}`;
-    let depth = 0;
-    let cursor = startIndex;
-    while (cursor < source.length) {
-      const nextBegin = source.indexOf(beginTag, cursor);
-      const nextEnd = source.indexOf(endTag, cursor);
-      if (nextBegin === -1 && nextEnd === -1) return -1;
-      if (nextBegin !== -1 && (nextBegin < nextEnd || nextEnd === -1)) {
-        depth += 1;
-        cursor = nextBegin + beginTag.length;
-        continue;
-      }
-      depth -= 1;
-      cursor = nextEnd + endTag.length;
-      if (depth === 0) return cursor;
-    }
-    return -1;
-  };
-  const hasLikelyMathContent = (value) => {
-    const source = String(value || '').trim();
-    if (!source || source.length > 1200) return false;
-    if (/^\d+(?:[.,]\d+)?$/.test(source) || /^[A-Za-z]+$/.test(source)) return false;
-    if (/[\\{}^_]/.test(source)) return true;
-    if (latexMathKeywordPattern.test(source)) return true;
-    if (/[=+\-*/<>]/.test(source) && /[A-Za-z0-9]/.test(source)) return true;
-    return false;
-  };
   const extractMathBlocks = (source) => {
     let cursor = 0;
     let output = '';
     while (cursor < source.length) {
       if (!isEscaped(source, cursor) && source.startsWith('\\begin{', cursor)) {
-        const beginMatch = source.slice(cursor).match(/^\\begin\{([A-Za-z*]+)\}/);
+        const beginMatch = source.slice(cursor).match(/^\\begin\{([A-Za-z*@]+)\}/);
         if (beginMatch) {
           const envName = beginMatch[1];
-          if (displayMathEnvs.has(envName.toLowerCase())) {
-            const envEnd = findMathEnvironmentEnd(source, cursor, envName);
-            if (envEnd !== -1) {
-              output += addMathPlaceholder(source.slice(cursor, envEnd), true);
+          const envEnd = findEnvironmentEnd(source, cursor, envName);
+          if (envEnd !== -1) {
+            const block = source.slice(cursor, envEnd);
+            if (shouldTreatEnvironmentAsMath(envName, block)) {
+              output += addMathPlaceholder(block, true);
               cursor = envEnd;
               continue;
             }
@@ -608,14 +674,18 @@ function renderText(text) {
       }
 
       if (source[cursor] === '$' && !isEscaped(source, cursor) && !source.startsWith('$$', cursor)) {
-        const inlineEnd = findMarkerEnd(source, '$', cursor + 1, true);
-        if (inlineEnd !== -1) {
-          const innerRaw = source.slice(cursor + 1, inlineEnd);
-          const inner = innerRaw.trim();
-          if (inner && hasLikelyMathContent(inner)) {
-            output += addMathPlaceholder(inner, false);
-            cursor = inlineEnd + 1;
-            continue;
+        const prev = source[cursor - 1] || '';
+        const next = source[cursor + 1] || '';
+        const likelyCurrency = /\d/.test(prev) && /\d/.test(next);
+        if (!likelyCurrency && next && !/\s/.test(next)) {
+          const inlineEnd = findInlineDollarEnd(source, cursor + 1);
+          if (inlineEnd !== -1) {
+            const inner = source.slice(cursor + 1, inlineEnd).trim();
+            if (inner && hasLikelyMathContent(inner)) {
+              output += addMathPlaceholder(inner, false);
+              cursor = inlineEnd + 1;
+              continue;
+            }
           }
         }
       }
@@ -641,7 +711,7 @@ function renderText(text) {
     const item = mathBlocks[Number(index)];
     if (!item) return '';
     try {
-      const normalizedTex = normalizeMathTexForKatex(item.tex);
+      const normalizedTex = normalizeMathTexForKatex(item.tex, item.display);
       return katex.renderToString(normalizedTex, {
         displayMode: item.display,
         throwOnError: false,
@@ -649,7 +719,9 @@ function renderText(text) {
         strict: 'ignore'
       });
     }
-    catch(e) { return escapeHtml(item.tex); }
+    catch (e) {
+      return escapeHtml(item.tex);
+    }
   });
 
   return html;

@@ -139,3 +139,7 @@ Web Page
 - 纯前端 Chrome MV3 扩展，无构建步骤。
 - 直接修改源码后，在扩展管理页点击“重新加载”即可。
 
+## 回归样例
+
+- Markdown + 复杂公式渲染回归用例：`MARKDOWN_MATH_REGRESSION.md`
+
