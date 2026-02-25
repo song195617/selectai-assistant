@@ -16,6 +16,7 @@
         "lib/marked.umd.min.js",
         "lib/purify.min.js",
         "lib/katex.min.js",
+        "rendering.js",
         "content.js"
       ],
       "run_at": "document_end"
