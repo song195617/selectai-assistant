@@ -119,7 +119,7 @@ async function processAIRequest(msg, port) {
     const activeProvider = activeProviderRaw
       ? { ...activeProviderRaw, key: localKey || (typeof activeProviderRaw.key === 'string' ? activeProviderRaw.key.trim() : '') }
       : null;
-    if (!activeProvider || !activeProvider.key) throw new Error("未选择模型或缺少 API Key。");
+    if (!activeProvider || !activeProvider.key) throw new Error("__CONFIG_ERROR__:未选择模型或缺少 API Key，请在设置中配置。");
     if (msg.action !== 'translate' && msg.action !== 'chat') {
       throw new Error(`不支持的请求类型: ${msg.action}`);
     }
@@ -413,8 +413,15 @@ async function handleGoogleGenAI(config, messages, settings, port) {
   });
 
   if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Google API Error ${response.status}: ${errText}`);
+    const errText = await response.text().catch(() => '');
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(`__CONFIG_ERROR__:API Key 无效或无权限（${response.status}），请在设置中检查。`);
+    } else if (response.status === 429) {
+      throw new Error(`请求过于频繁，请稍后再试。`);
+    } else if (response.status >= 500) {
+      throw new Error(`服务器暂时不可用（${response.status}），请稍后重试。`);
+    }
+    throw new Error(`Google API Error ${response.status}: ${errText.slice(0, 200)}`);
   }
 
   await readStreamWithBracketCounting(response, port, extractGeminiResponseParts);
@@ -440,8 +447,15 @@ async function handleOpenAICompatible(config, messages, settings, port) {
   });
 
   if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`API Error ${response.status}: ${errText}`);
+    const errText = await response.text().catch(() => '');
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(`__CONFIG_ERROR__:API Key 无效或无权限（${response.status}），请在设置中检查。`);
+    } else if (response.status === 429) {
+      throw new Error(`请求过于频繁，请稍后再试。`);
+    } else if (response.status >= 500) {
+      throw new Error(`服务器暂时不可用（${response.status}），请稍后重试。`);
+    }
+    throw new Error(`API Error ${response.status}: ${errText.slice(0, 200)}`);
   }
 
   await readStreamSSE(response, port);
@@ -512,7 +526,7 @@ async function readStreamSSE(response, port) {
       const chunk = extractOpenAIResponseText(json, false);
       if (chunk) tryPostMessage(port, { type: 'chunk', content: chunk });
     } catch (error) {
-      console.warn('Failed to parse SSE data chunk:', error);
+      console.warn('Failed to parse SSE data chunk:', error.constructor.name);
     }
   };
 

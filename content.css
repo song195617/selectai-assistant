@@ -81,6 +81,14 @@
 }
 .ai-loading, .ai-loading-dots { color: #888; font-style: italic; }
 .ai-error { color: #d32f2f; background: #fff5f5; padding: 10px; border-radius: 4px; font-size: 13px; }
+.ai-error-actions { display: flex; gap: 8px; margin-top: 8px; }
+.ai-error-btn {
+  padding: 4px 12px; border-radius: 4px; border: 1px solid #d32f2f;
+  background: #fff; color: #d32f2f; font-size: 12px; cursor: pointer;
+}
+.ai-error-btn:hover { background: #fff5f5; }
+.ai-error-btn-secondary { border-color: #6c757d; color: #6c757d; }
+.ai-error-btn-secondary:hover { background: #f8f9fa; }
 .ai-thinking {
   margin-bottom: 10px;
   border: 1px solid #e7ebf2;
@@ -165,6 +173,12 @@
   color: #fecaca;
   background: #3f1d1d;
 }
+#ai-assist-popup.theme-dark .ai-error-btn {
+  background: #3f1d1d; color: #fecaca; border-color: #fecaca;
+}
+#ai-assist-popup.theme-dark .ai-error-btn:hover { background: #5c2a2a; }
+#ai-assist-popup.theme-dark .ai-error-btn-secondary { color: #9ca3af; border-color: #9ca3af; }
+#ai-assist-popup.theme-dark .ai-error-btn-secondary:hover { background: #1f2937; }
 #ai-assist-popup.theme-dark .ai-thinking {
   background: #111827;
   border-color: #334155;

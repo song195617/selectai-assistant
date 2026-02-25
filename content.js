@@ -28,7 +28,9 @@ const CONTENT_I18N = {
     model_no_content: '模型未返回内容。',
     error_prefix: '错误:',
     context_invalidated: '扩展上下文已失效（通常是扩展重载导致），请刷新当前页面后重试。',
-    request_failed: '请求失败。'
+    request_failed: '请求失败。',
+    retry: '重试',
+    open_settings: '打开设置'
   },
   en: {
     btn_translate: 'Translate/Explain',
@@ -43,7 +45,9 @@ const CONTENT_I18N = {
     model_no_content: 'Model returned no content.',
     error_prefix: 'Error:',
     context_invalidated: 'Extension context was invalidated (usually after reloading the extension). Refresh this page and try again.',
-    request_failed: 'Request failed.'
+    request_failed: 'Request failed.',
+    retry: 'Retry',
+    open_settings: 'Open Settings'
   }
 };
 
@@ -917,16 +921,52 @@ function formatErrorMessage(message) {
   return `${t('error_prefix')} ${message}`;
 }
 
-function showPopupError(message) {
+function showPopupError(message, payload) {
   updateTitleStatus('error');
   if (!popup) return;
   const contentEl = popup.querySelector('#ai-popup-content');
   if (!contentEl) return;
+
+  const isConfigError = typeof message === 'string' && message.startsWith('__CONFIG_ERROR__:');
+  const displayMsg = isConfigError ? message.slice('__CONFIG_ERROR__:'.length) : message;
+
+  contentEl.innerHTML = '';
+
   const err = document.createElement('div');
   err.className = 'ai-error';
-  err.textContent = formatErrorMessage(message);
-  contentEl.textContent = '';
+  err.textContent = formatErrorMessage(displayMsg);
   contentEl.appendChild(err);
+
+  const actions = document.createElement('div');
+  actions.className = 'ai-error-actions';
+
+  if (payload) {
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'ai-error-btn';
+    retryBtn.textContent = t('retry');
+    retryBtn.onclick = () => {
+      contentEl.innerHTML = `<div class="ai-loading">${t('thinking_loading')}</div>`;
+      currentStreamingRawMessage = '';
+      currentStreamingMessage = '';
+      currentThinkingMessage = '';
+      updateTitleStatus('loading');
+      connectAndSend(payload,
+        null, null,
+        (err2) => showPopupError(err2, payload)
+      );
+    };
+    actions.appendChild(retryBtn);
+  }
+
+  if (isConfigError) {
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className = 'ai-error-btn ai-error-btn-secondary';
+    settingsBtn.textContent = t('open_settings');
+    settingsBtn.onclick = () => { try { chrome.runtime.openOptionsPage(); } catch (e) {} };
+    actions.appendChild(settingsBtn);
+  }
+
+  if (actions.children.length > 0) contentEl.appendChild(actions);
 }
 
 function disconnectPort(targetPort, sendCancel) {
@@ -955,7 +995,7 @@ function connectAndSend(payload, onChunk, onDone, onError, onThinking) {
   } catch (error) {
     const message = normalizeRuntimeErrorMessage(error);
     if (onError) onError(message);
-    else showPopupError(message);
+    else showPopupError(message, payload);
     return;
   }
 
@@ -966,7 +1006,7 @@ function connectAndSend(payload, onChunk, onDone, onError, onThinking) {
   } catch (error) {
     const message = normalizeRuntimeErrorMessage(error);
     if (onError) onError(message);
-    else showPopupError(message);
+    else showPopupError(message, payload);
     disconnectCurrentPort(false);
     return;
   }
@@ -980,7 +1020,7 @@ function connectAndSend(payload, onChunk, onDone, onError, onThinking) {
     if (runtimeErr) {
       const message = normalizeRuntimeErrorMessage(new Error(runtimeErr));
       if (onError) onError(message);
-      else showPopupError(message);
+      else showPopupError(message, payload);
     } else if (!isChatMode) {
       updateTitleStatus('done');
       finalizeTranslateLoadingState();
@@ -1017,16 +1057,8 @@ function connectAndSend(payload, onChunk, onDone, onError, onThinking) {
       }
     } else if (msg.type === 'error') {
       isFinished = true;
-      updateTitleStatus('error');
-      if (onError) onError(msg.content);
-      else {
-        const contentEl = popup.querySelector('#ai-popup-content');
-        const err = document.createElement('div');
-        err.className = 'ai-error';
-        err.textContent = formatErrorMessage(msg.content);
-        contentEl.textContent = '';
-        contentEl.appendChild(err);
-      }
+      if (onError) { updateTitleStatus('error'); onError(msg.content); }
+      else showPopupError(msg.content, payload);
       disconnectCurrentPort(false);
     } else if (msg.type === 'done') {
       isFinished = true;
@@ -1098,9 +1130,21 @@ function sendChatRequest() {
     (errMsg) => {
       updateTitleStatus('error');
       chatHistory.pop(); loadingSpan.remove();
+      const isConfigErr = typeof errMsg === 'string' && errMsg.startsWith('__CONFIG_ERROR__:');
+      const displayErrMsg = isConfigErr ? errMsg.slice('__CONFIG_ERROR__:'.length) : errMsg;
       const errDiv = document.createElement('div');
-      errDiv.className = 'ai-error'; errDiv.textContent = formatErrorMessage(errMsg);
+      errDiv.className = 'ai-error'; errDiv.textContent = formatErrorMessage(displayErrMsg);
       responseDiv.appendChild(errDiv);
+      if (isConfigErr) {
+        const actions = document.createElement('div');
+        actions.className = 'ai-error-actions';
+        const settingsBtn = document.createElement('button');
+        settingsBtn.className = 'ai-error-btn ai-error-btn-secondary';
+        settingsBtn.textContent = t('open_settings');
+        settingsBtn.onclick = () => { try { chrome.runtime.openOptionsPage(); } catch (e) {} };
+        actions.appendChild(settingsBtn);
+        responseDiv.appendChild(actions);
+      }
       scrollToBottom(container);
     },
     (thinkingChunk) => {
